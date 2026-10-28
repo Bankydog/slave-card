@@ -278,14 +278,35 @@ func _show_lobby() -> void:
 	for player in room_players:
 		var card := PanelContainer.new()
 		card.custom_minimum_size = Vector2(220.0, 54.0) * _display_scale()
+		var card_content := Control.new()
+		card_content.custom_minimum_size = card.custom_minimum_size
+		card_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		card_content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		card.add_child(card_content)
+		var centered_name := CenterContainer.new()
+		centered_name.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		var line := Label.new()
 		var badge := "Host" if bool(player.get("is_host", false)) else ("Bot" if bool(player.get("is_bot", false)) else "Guest")
-		var ready_text := "Ready" if bool(player.get("ready", false)) else "Not Ready"
-		line.text = "%s  ·  %s  ·  %s" % [str(player.get("name", "Guest")), badge, ready_text]
+		line.text = "%s  ·  %s" % [str(player.get("name", "Guest")), badge]
 		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		line.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		line.add_theme_font_size_override("font_size", maxi(16, roundi(18.0 * _display_scale())))
-		card.add_child(line)
+		centered_name.add_child(line)
+		card_content.add_child(centered_name)
+		if bool(player.get("ready", false)):
+			var ready_icon := TextureRect.new()
+			ready_icon.name = "ReadyIcon"
+			ready_icon.texture = load("res://assets/gadget/check.png")
+			ready_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			ready_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			var icon_size := 24.0 * _display_scale()
+			var icon_margin := 6.0 * _display_scale()
+			ready_icon.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+			ready_icon.offset_left = -icon_size - icon_margin
+			ready_icon.offset_top = icon_margin
+			ready_icon.offset_right = -icon_margin
+			ready_icon.offset_bottom = icon_size + icon_margin
+			card_content.add_child(ready_icon)
 		grid.add_child(card)
 	var ready_summary := Label.new()
 	ready_summary.text = "Ready %d / %d" % [lobby_ready_count, lobby_human_count]
