@@ -5,6 +5,8 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     plan: free
+    numInstances: 1
+    healthCheckPath: /health
 
   - type: web
     name: slave-card-client

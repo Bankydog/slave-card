@@ -5,6 +5,7 @@ const RoomServiceScript = preload("res://scripts/network/room_service.gd")
 
 const DEFAULT_PORT := 10000
 const BIND_ADDRESS := "0.0.0.0"
+const INTERNAL_DEFAULT_PORT := 10001
 
 var port: int = DEFAULT_PORT
 var bind_address := BIND_ADDRESS
@@ -12,12 +13,16 @@ var socket_peer: WebSocketMultiplayerPeer
 var room_service
 
 static func _configured_port() -> int:
-	var port_value := OS.get_environment("PORT").strip_edges()
+	var port_value := OS.get_environment("GODOT_PORT").strip_edges()
+	if port_value.is_empty():
+		if OS.get_environment("GODOT_BIND_ADDRESS").strip_edges() == "127.0.0.1":
+			return INTERNAL_DEFAULT_PORT
+		port_value = OS.get_environment("PORT").strip_edges()
 	if port_value.is_empty():
 		return DEFAULT_PORT
 	if port_value.is_valid_int() and int(port_value) > 0 and int(port_value) <= 65535:
 		return int(port_value)
-	push_error("PORT must be an integer between 1 and 65535.")
+	push_error("GODOT_PORT or PORT must be an integer between 1 and 65535.")
 	return -1
 
 func _ready() -> void:
@@ -32,6 +37,9 @@ func _ready() -> void:
 		get_tree().quit(1)
 		return
 	socket_peer = WebSocketMultiplayerPeer.new()
+	var configured_bind_address := OS.get_environment("GODOT_BIND_ADDRESS").strip_edges()
+	if not configured_bind_address.is_empty():
+		bind_address = configured_bind_address
 	var error := socket_peer.create_server(port, bind_address)
 	if error != OK:
 		push_error("Could not start WebSocket room server on port %d (error %d)." % [port, error])

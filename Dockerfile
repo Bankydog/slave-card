@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && install -m 0755 /tmp/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot \
     && rm -rf /tmp/godot /tmp/godot.zip
 
-FROM debian:bookworm-slim
+FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libfontconfig1 libgl1 libasound2 libpulse0 libx11-6 libxcursor1 libxinerama1 libxrandr2 libxi6 libxrender1 libudev1 \
     && rm -rf /var/lib/apt/lists/* \
@@ -18,4 +18,4 @@ WORKDIR /app
 COPY --chown=godot:godot . /app
 USER godot
 EXPOSE 10000
-ENTRYPOINT ["godot", "--headless", "--path", "/app", "res://scenes/server.tscn"]
+ENTRYPOINT ["node", "/app/server/render_proxy.js"]

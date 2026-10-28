@@ -2,13 +2,13 @@
 
 ## Local development
 
-Run the project normally in Godot. Start the authoritative server with `res://scenes/server.tscn`; it binds to `0.0.0.0` and uses `PORT`, or `10000` when `PORT` is unset. The multiplayer menu defaults to `ws://127.0.0.1:10000`, which works with that local server. To use another local port, set `PORT` for the server and enter the matching `ws://127.0.0.1:<port>` address in the Host field.
+Run the project normally in Godot. Start the authoritative server directly with `res://scenes/server.tscn`; it binds to `0.0.0.0` and uses `PORT`, or `10000` when `PORT` is unset. The multiplayer menu defaults to `ws://127.0.0.1:10000`, which works with that local direct-development server. To use another local port, set `PORT` for the server and enter the matching `ws://127.0.0.1:<port>` address in the Host field. The Docker container uses the proxy and an internal `GODOT_PORT` of `10001` instead.
 
 ## WebSocket server on Render
 
-The root `Dockerfile` runs the authoritative server scene. Create a Render **Web Service** from this repository and choose **Docker** as its runtime. Keep the Dockerfile path as `./Dockerfile`; Render supplies `PORT` at runtime. The server listens on that port and binds publicly. Render terminates TLS, so clients connect using `wss://<service-name>.onrender.com`.
+The root `Dockerfile` runs a small Node HTTP/WebSocket transport proxy and the authoritative Godot server. The proxy binds `0.0.0.0:$PORT`, serves HTTP 200 at `/` and `/health`, and forwards WebSocket upgrades on `/` to Godot at `127.0.0.1:10001`. Godot binds only to that loopback address and remains responsible for rooms, player state, game rules, turns, bots, card exchange, and gameplay state. Render terminates TLS, so the public client URL remains `wss://slave-card-server.onrender.com`.
 
-The same settings are described in `render.yaml`. The Web Service needs a plan that supports persistent WebSocket connections.
+The same settings are described in `render.yaml`: the server uses the Free plan, `/health` is the HTTP health check, and one instance is configured. Room and session state remains in process memory; horizontal scaling beyond one instance will require shared room/session state or routing changes. Render closes existing WebSocket connections when it replaces an instance, so clients need to reconnect after a deploy or restart.
 
 ## Godot Web export
 
