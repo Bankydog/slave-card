@@ -9,7 +9,7 @@ const BIND_ADDRESS := "0.0.0.0"
 var port: int = DEFAULT_PORT
 var bind_address := BIND_ADDRESS
 var socket_peer: WebSocketMultiplayerPeer
-var room_service: RoomService
+var room_service
 
 static func _configured_port() -> int:
 	var port_value := OS.get_environment("PORT").strip_edges()
