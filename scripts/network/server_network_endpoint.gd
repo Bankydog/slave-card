@@ -9,7 +9,7 @@ const BIND_ADDRESS := "0.0.0.0"
 var port: int = DEFAULT_PORT
 var bind_address := BIND_ADDRESS
 var socket_peer: WebSocketMultiplayerPeer
-var room_service = RoomServiceScript.new()
+var room_service: RoomService
 
 static func _configured_port() -> int:
 	var port_value := OS.get_environment("PORT").strip_edges()
@@ -21,11 +21,16 @@ static func _configured_port() -> int:
 	return -1
 
 func _ready() -> void:
+	room_service = RoomServiceScript.new()
+	if room_service == null or not is_instance_valid(room_service):
+		push_error("FATAL: Could not create RoomService; stopping server.")
+		get_tree().quit(1)
+		return
+	room_service.send_to_peer.connect(_send_to_peer)
 	port = _configured_port()
 	if port < 1:
 		get_tree().quit(1)
 		return
-	room_service.send_to_peer.connect(_send_to_peer)
 	socket_peer = WebSocketMultiplayerPeer.new()
 	var error := socket_peer.create_server(port, bind_address)
 	if error != OK:
@@ -36,6 +41,8 @@ func _ready() -> void:
 	print("Slave Card WebSocket room server listening on %s:%d" % [bind_address, port])
 
 func _process(delta: float) -> void:
+	if room_service == null:
+		return
 	room_service.tick(delta)
 
 func is_server_endpoint() -> bool:

@@ -18,10 +18,10 @@ The project includes a `Web` export preset targeting `web-build/index.html`. Ins
 python3 tools/export_web.py
 ```
 
-On Render, the export script downloads the pinned Godot 4.7.2 binary and Web templates if needed. The generated `web-build/` directory is ignored by Git.
+The generated `web-build/` directory is committed to Git and served directly by Render. After gameplay or client changes, a developer must export the Web build locally and commit the updated `web-build/` files.
 
 ## Render Static Site
 
-Create a Render **Static Site** from the same repository. Set the build command to `python3 tools/export_web.py --require-production-url` and the publish directory to `web-build`. Before deploying, add the Static Site environment variable `SLAVE_CARD_SERVER_URL` with the public URL of the Web Service, for example `wss://slave-card-server.onrender.com`. `render.yaml` includes this configuration; Render prompts for the URL because it is marked `sync: false`.
+Create a Render **Static Site** from the same repository. Set the build command to `echo "Using committed Godot Web build"` and the publish directory to `web-build`. Render does not install Godot or export the project during deployment.
 
-The export script temporarily writes this URL into `config/server_url.cfg` for the web build and restores the tracked local-development value afterward. The production URL is therefore baked into the exported client, while local runs continue to use `ws://127.0.0.1:10000`.
+The export script temporarily writes `wss://slave-card-server.onrender.com` into `config/server_url.cfg` for the production Web build and restores the tracked local-development value afterward. The production URL is baked into the committed exported client, while local runs continue to use `ws://127.0.0.1:10000`. To refresh the production client, run `SLAVE_CARD_SERVER_URL=wss://slave-card-server.onrender.com python3 tools/export_web.py` on a machine with Godot 4.7.2 and its Web templates installed, then commit the updated `web-build/`.
