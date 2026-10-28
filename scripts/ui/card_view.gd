@@ -11,10 +11,10 @@ var top_rank: Label
 var center_suit: TextureRect
 
 const SUIT_TEXTURES := {
-	"Clubs": preload("res://assets/suits/clubs.svg"),
-	"Diamonds": preload("res://assets/suits/diamonds.svg"),
-	"Hearts": preload("res://assets/suits/hearts.svg"),
-	"Spades": preload("res://assets/suits/spades.svg"),
+	"Clubs": preload("res://assets/suits/clubs.png"),
+	"Diamonds": preload("res://assets/suits/diamonds.png"),
+	"Hearts": preload("res://assets/suits/hearts.png"),
+	"Spades": preload("res://assets/suits/spades.png"),
 }
 
 func setup(card_data: CardData, is_selected: bool = false, compact: bool = false, scale_factor: float = 1.0) -> void:
@@ -59,9 +59,9 @@ func _create_face_marks() -> void:
 	center_suit.texture = _suit_texture()
 	center_suit.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	center_suit.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	var suit_size := Vector2(28.0, 28.0) if compact_view else Vector2(38.0, 38.0)
+	var suit_size := Vector2(40.0, 40.0) if compact_view else Vector2(52.0, 52.0)
 	center_suit.size = suit_size * card_scale_factor
-	center_suit.position = (Vector2(width, height) - center_suit.size) * 0.5
+	center_suit.position = (Vector2(width, height) - center_suit.size) * 0.5 + Vector2(0.0, 6.0 * card_scale_factor)
 	center_suit.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	face_overlay.add_child(center_suit)
 	face_overlay.custom_minimum_size = Vector2(width, height)
