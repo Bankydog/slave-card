@@ -1,11 +1,19 @@
 extends Control
 
 const CardViewScript = preload("res://scripts/ui/card_view.gd")
+const KING_TEXTURE = preload("res://assets/gadget/king.png")
+const QUEEN_TEXTURE = preload("res://assets/gadget/queen.png")
+const SEVEN_TEXTURE = preload("res://assets/gadget/se7en.png")
+const SLAVES_TEXTURE = preload("res://assets/gadget/slaves.png")
+const RPS_ATLAS = preload("res://assets/suits/SPR.png")
+const CARD_FLIP_SOUND = preload("res://assets/sound/flip-card.mp3")
 
 var seat_widgets: Array[PanelContainer] = []
 var name_labels: Array[Label] = []
+var role_icons: Array[TextureRect] = []
 var detail_labels: Array[Label] = []
 var status_labels: Array[Label] = []
+var card_flip_player: AudioStreamPlayer
 var center_title: Label
 var center_pile: Control
 var center_layer: CenterContainer
@@ -29,6 +37,10 @@ func _ready() -> void:
 	play_flight_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	play_flight_layer.z_index = 100
 	add_child(play_flight_layer)
+	card_flip_player = AudioStreamPlayer.new()
+	card_flip_player.name = "CardFlipPlayer"
+	card_flip_player.stream = CARD_FLIP_SOUND
+	add_child(card_flip_player)
 
 func configure(players: Array, local_index: int, current_player: int, passed: Array, cards: Array, center_text: String, compact: bool, played_by: int = -1) -> void:
 	compact_view = compact
@@ -44,8 +56,8 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 		var card_count := int(player.get("card_count", player.get("hand", []).size()))
 		name_labels[i].text = "%d · %s" % [i + 1, player_name]
 		var details := "%d cards" % card_count
-		if not role.is_empty():
-			details = "%s · %s" % [role, details]
+		role_icons[i].texture = role_texture(role)
+		role_icons[i].visible = role_icons[i].texture != null; role_icons[i].custom_minimum_size = (Vector2(38, 32) if compact_view else Vector2(48, 40)) * layout_scale
 		detail_labels[i].text = details
 		var status := "WAITING"
 		if bool(player.get("finished", false)):
@@ -99,6 +111,11 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 	var card_width := (42.0 if compact_view else 58.0) * layout_scale
 	var card_height := (64.0 if compact_view else 92.0) * layout_scale
 	var pile_cards: Control = center_pile.get_child(0)
+	var sound_duration := CARD_FLIP_SOUND.get_length()
+	var stagger := 0.035
+	var flight_duration := maxf(0.1, sound_duration - stagger * float(cards.size() - 1))
+	card_flip_player.stop()
+	card_flip_player.play()
 	play_animation_tween = create_tween()
 	play_animation_tween.set_parallel(true)
 	for i in range(cards.size()):
@@ -113,10 +130,10 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 		play_flight_layer.add_child(flight_card)
 		var target_card := pile_cards.get_child(i) as Control
 		var destination := play_flight_layer.get_global_transform().affine_inverse() * target_card.global_position
-		var delay := float(i) * 0.035
-		play_animation_tween.tween_property(flight_card, "position", destination, 0.42).set_delay(delay).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		play_animation_tween.tween_property(flight_card, "scale", Vector2.ONE, 0.42).set_delay(delay).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		play_animation_tween.tween_property(flight_card, "rotation", target_card.rotation, 0.42).set_delay(delay)
+		var delay := float(i) * stagger
+		play_animation_tween.tween_property(flight_card, "position", destination, flight_duration).set_delay(delay).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		play_animation_tween.tween_property(flight_card, "scale", Vector2.ONE, flight_duration).set_delay(delay).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		play_animation_tween.tween_property(flight_card, "rotation", target_card.rotation, flight_duration).set_delay(delay)
 	play_animation_tween.finished.connect(_finish_card_flight.bind(animation_token))
 
 func _finish_card_flight(animation_token: int) -> void:
@@ -161,7 +178,7 @@ func _ensure_seats(count: int) -> void:
 			remove_child(child)
 			child.queue_free()
 	seat_widgets.clear()
-	name_labels.clear()
+	name_labels.clear(); role_icons.clear()
 	detail_labels.clear()
 	status_labels.clear()
 	for i in range(count):
@@ -172,12 +189,13 @@ func _ensure_seats(count: int) -> void:
 		content.add_theme_constant_override("separation", 0)
 		content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		panel.add_child(content)
-		var player_name := Label.new()
-		player_name.clip_text = true
+		var name_row := HBoxContainer.new(); name_row.add_theme_constant_override("separation", 4); content.add_child(name_row); var player_name := Label.new()
+		player_name.clip_text = true; player_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			
 		player_name.add_theme_font_size_override("font_size", 16)
 		player_name.add_theme_color_override("font_color", Color("#fff8e8"))
 		player_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		content.add_child(player_name)
+		name_row.add_child(player_name); var role_icon := TextureRect.new(); role_icon.name = "RoleIcon"; role_icon.custom_minimum_size = Vector2(28, 24); role_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE; role_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED; role_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE; role_icon.hide(); name_row.add_child(role_icon)
 		var details := Label.new()
 		details.clip_text = true
 		details.add_theme_font_size_override("font_size", 16)
@@ -192,10 +210,40 @@ func _ensure_seats(count: int) -> void:
 		content.add_child(status)
 		add_child(panel)
 		seat_widgets.append(panel)
-		name_labels.append(player_name)
+		name_labels.append(player_name); role_icons.append(role_icon)
 		detail_labels.append(details)
 		status_labels.append(status)
 	_layout_seats()
+
+static func rps_texture(choice: int) -> AtlasTexture:
+	var cropped := AtlasTexture.new()
+	cropped.atlas = RPS_ATLAS
+	var cell_width := float(RPS_ATLAS.get_width()) / 3.0
+	cropped.region = Rect2(cell_width * clampi(choice, 0, 2), 0.0, cell_width, float(RPS_ATLAS.get_height()))
+	return cropped
+
+static func make_role_summary_row(role: String, line: Label, scale: float) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	var role_icon := TextureRect.new()
+	role_icon.texture = role_texture(role)
+	if role_icon.texture != null:
+		role_icon.custom_minimum_size = Vector2(36, 36) * scale
+	role_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	role_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	role_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(role_icon)
+	row.add_child(line)
+	return row
+
+static func role_texture(role: String) -> Texture2D:
+	var normalized := role.to_lower()
+	match normalized:
+		"king": return KING_TEXTURE
+		"queen": return QUEEN_TEXTURE
+		"seven", "se7en": return SEVEN_TEXTURE
+		_:
+			return SLAVES_TEXTURE if normalized.begins_with("slave") else null
 
 func _style_seat(panel: PanelContainer, is_current: bool, is_local: bool) -> void:
 	var style := StyleBoxFlat.new()
@@ -250,7 +298,7 @@ static func normalized_seat_positions(player_count: int, compact: bool = false, 
 	result[0] = Vector2(0.5, 0.86)
 	var opponents := count - 1
 	if count >= 2 and count <= 4:
-		var chair_positions: Array[Vector2] = [Vector2(0.5, 0.88), Vector2(0.9, 0.52), Vector2(0.5, 0.18), Vector2(0.1, 0.52)]
+		var chair_positions: Array[Vector2] = [Vector2(0.5, 0.88), Vector2(0.1, 0.52), Vector2(0.5, 0.18), Vector2(0.9, 0.52)]
 		var normalized_local_index := posmod(local_index, count)
 		for i in range(count):
 			var seat_offset := posmod(i - normalized_local_index, count)

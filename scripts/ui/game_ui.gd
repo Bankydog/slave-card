@@ -31,6 +31,9 @@ var local_round_number := 0
 var selected_exchange_ids: Array[String] = []
 var previous_king_demoted := false
 var next_round_starter := -1
+var local_rps_players: Array[int] = []
+var local_rps_round := 1
+var local_rps_message := ""
 var player_count := 4
 var local_player_name := "Player"
 var table_background: TextureRect
@@ -45,7 +48,7 @@ func _ready() -> void:
 
 func _clear() -> void:
 	if is_instance_valid(table_background):
-		table_background.hide()
+		set_title_screen_enabled(true)
 	for child in get_children():
 		if child == multiplayer_flow or child == table_background:
 			continue
@@ -68,11 +71,6 @@ func _build_menu() -> void:
 	root.add_theme_constant_override("separation", roundi(18.0 * _display_scale()))
 	root.alignment = BoxContainer.ALIGNMENT_CENTER
 	add_child(root)
-	var title := Label.new()
-	title.text = "SLAVE CARD"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", roundi(38.0 * _display_scale()))
-	root.add_child(title)
 	var count_row := HBoxContainer.new()
 	count_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	root.add_child(count_row)
@@ -154,15 +152,87 @@ func _start_local_round() -> void:
 		var exchange_result: Dictionary = local_exchange.begin(state.players, local_roles_by_player, bot_flags)
 		if exchange_result.ok and (local_exchange.pending_amount_for(0) > 0 or not local_exchange.is_complete()):
 			local_phase = "card_exchange"
+	else:
+		local_rps_players = state.three_clubs_holders()
+		if local_rps_players.size() > 1:
+			local_rps_round = 1
+			local_rps_message = ""
+			if local_rps_players.has(0):
+				_show_local_rps()
+				return
+			var bot_winner := _local_bot_rps_winner()
+			state.current_player = bot_winner
+			state.turns.start_at(bot_winner, player_count)
+	_build_table()
+	_refresh()
+
+func _show_local_rps() -> void:
+	set_game_background(player_count)
+	var root := VBoxContainer.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.alignment = BoxContainer.ALIGNMENT_CENTER
+	root.add_theme_constant_override("separation", roundi(16.0 * _display_scale()))
+	add_child(root)
+	var heading := Label.new()
+	heading.text = local_rps_message if not local_rps_message.is_empty() else "Two players hold 3♣. Choose a card:"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(heading)
+	var options := HBoxContainer.new()
+	options.alignment = BoxContainer.ALIGNMENT_CENTER
+	options.add_theme_constant_override("separation", roundi(14.0 * _display_scale()))
+	root.add_child(options)
+	var choice_names := ["Rock", "Paper", "Scissors"]
+	for choice in range(choice_names.size()):
+		var column := VBoxContainer.new()
+		column.alignment = BoxContainer.ALIGNMENT_CENTER
+		options.add_child(column)
+		var pick := TextureButton.new()
+		pick.texture_normal = TablePresentationScript.rps_texture(choice)
+		pick.ignore_texture_size = true
+		pick.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+		pick.custom_minimum_size = Vector2(150.0, 210.0) * _display_scale()
+		pick.pressed.connect(_choose_local_rps.bind(choice))
+		column.add_child(pick)
+		var caption := Label.new()
+		caption.text = choice_names[choice]
+		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		column.add_child(caption)
+
+func _choose_local_rps(human_choice: int) -> void:
+	var opponent := int(local_rps_players[1]) if int(local_rps_players[0]) == 0 else int(local_rps_players[0])
+	var bot_choice: int = state.rng.randi_range(0, 2)
+	var result := _rps_winner(human_choice, bot_choice)
+	if result < 0:
+		local_rps_round += 1
+		local_rps_message = "Tie! Choose again (round %d)." % local_rps_round
+		_show_local_rps()
+		return
+	_finish_local_rps(0 if result == 0 else opponent)
+
+func _local_bot_rps_winner() -> int:
+	while true:
+		var result := _rps_winner(state.rng.randi_range(0, 2), state.rng.randi_range(0, 2))
+		if result >= 0:
+			return int(local_rps_players[result])
+	return int(local_rps_players[0])
+
+func _rps_winner(first_choice: int, second_choice: int) -> int:
+	if first_choice == second_choice:
+		return -1
+	if (first_choice == 0 and second_choice == 2) or (first_choice == 1 and second_choice == 0) or (first_choice == 2 and second_choice == 1):
+		return 0
+	return 1
+
+func _finish_local_rps(winner: int) -> void:
+	state.current_player = winner
+	state.turns.start_at(winner, player_count)
+	local_rps_players.clear()
+	local_rps_message = ""
 	_build_table()
 	_refresh()
 
 func _build_table() -> void:
-	set_table_background_enabled(player_count >= 2 and player_count <= 4)
-	if player_count >= 2 and player_count <= 4:
-		table_background.texture = TABLE_FOUR_TEXTURE
-	else:
-		table_background.texture = TABLE_MANY_TEXTURE
+	set_game_background(player_count)
 	var root := VBoxContainer.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_theme_constant_override("separation", roundi((4.0 if _is_compact_view() else 10.0) * _display_scale()))
@@ -363,6 +433,7 @@ func _bot_move() -> void:
 
 func _show_results() -> void:
 	_clear()
+	set_game_background(player_count)
 	var root := VBoxContainer.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -380,7 +451,7 @@ func _show_results() -> void:
 		var line := Label.new()
 		line.text = "%s  —  %s" % [role, player.name]
 		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		root.add_child(line)
+		root.add_child(TablePresentationScript.make_role_summary_row(role, line, _display_scale()))
 	if previous_king_demoted:
 		var demotion := Label.new()
 		demotion.text = "The previous King is now Slave 1."
@@ -412,18 +483,18 @@ func _show_results() -> void:
 	root.add_child(menu)
 	_enforce_text_minimum(root)
 
-func set_table_background_enabled(enabled: bool) -> void:
-	if is_instance_valid(table_background):
-		table_background.visible = enabled
+func set_game_background(players: int) -> void:
+	if not is_instance_valid(table_background):
+		return
+	table_background.texture = TABLE_FOUR_TEXTURE if players >= 2 and players <= 4 else TABLE_MANY_TEXTURE
+	table_background.visible = true
 
 func set_title_screen_enabled(enabled: bool) -> void:
 	if not is_instance_valid(table_background):
 		return
 	if enabled:
 		table_background.texture = TITLE_TEXTURE
-		table_background.visible = true
-	elif table_background.texture == TITLE_TEXTURE:
-		table_background.visible = false
+	table_background.visible = enabled
 
 func _display_scale() -> float:
 	return CARD_VIEW.display_scale(get_viewport_rect().size)

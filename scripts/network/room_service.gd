@@ -39,6 +39,8 @@ func handle_message(peer_id: int, message: Dictionary) -> void:
 			_pass(peer_id)
 		Protocol.SELECT_CARDS:
 			_select_cards(peer_id, payload)
+		Protocol.SELECT_RPS:
+			_select_rps(peer_id, payload)
 		_:
 			_reject(peer_id, "Unknown action.")
 
@@ -90,6 +92,9 @@ func _create_room(peer_id: int, payload: Dictionary) -> void:
 		"roles_by_player": {},
 		"game_state": null,
 		"exchange": null,
+		"rps_players": [],
+		"rps_choices": {},
+		"rps_round": 1,
 		"bot_delay": 0.0,
 		"last_finished_count": 0
 	}
@@ -227,6 +232,16 @@ func _start_round(room: Dictionary) -> void:
 	room.bot_delay = 0.0
 
 	var phase := "playing"
+	room.rps_players = []
+	room.rps_choices = {}
+	room.rps_round = 1
+	if round_starter < 0:
+		room.rps_players = room.game_state.three_clubs_holders()
+		if room.rps_players.size() > 1:
+			phase = "rps_tiebreak"
+			for player_index in room.rps_players:
+				if bool(room.members[player_index].is_bot):
+					room.rps_choices[str(player_index)] = rng.randi_range(0, 2)
 	var exchange_summary := {"ok": true, "pending_count": 0}
 	if int(room.round_number) > 1:
 		room.exchange = CardExchangeScript.new()
@@ -251,10 +266,69 @@ func _start_round(room: Dictionary) -> void:
 		"players": _public_players(room)
 	})
 	_send_deals(room)
+	if room.phase == "rps_tiebreak":
+		_resolve_rps(room)
 	if room.exchange != null:
 		_broadcast_exchange(room, exchange_summary)
 	if room.phase == "playing":
 		_broadcast_turn(room)
+
+func _select_rps(peer_id: int, payload: Dictionary) -> void:
+	var room = _room_for_peer(peer_id)
+	if room == null or room.phase != "rps_tiebreak":
+		_reject(peer_id, "Rock-paper-scissors is not waiting.")
+		return
+	var player_index := _player_index_for_peer(room, peer_id)
+	if not room.rps_players.has(player_index) or bool(room.members[player_index].is_bot):
+		_reject(peer_id, "This player cannot choose a card.")
+		return
+	var choice := int(payload.get("choice", -1))
+	if choice < 0 or choice > 2:
+		_reject(peer_id, "Choose rock, paper, or scissors.")
+		return
+	var key := str(player_index)
+	if room.rps_choices.has(key):
+		_reject(peer_id, "Your choice is already locked.")
+		return
+	room.rps_choices[key] = choice
+	_resolve_rps(room)
+
+func _resolve_rps(room: Dictionary) -> void:
+	if room.rps_choices.size() < room.rps_players.size():
+		_broadcast_rps_state(room)
+		return
+	var first := int(room.rps_choices[str(room.rps_players[0])])
+	var second := int(room.rps_choices[str(room.rps_players[1])])
+	var outcome := _rps_winner(first, second)
+	if outcome < 0:
+		room.rps_round = int(room.rps_round) + 1
+		room.rps_choices.clear()
+		for player_index in room.rps_players:
+			if bool(room.members[player_index].is_bot):
+				room.rps_choices[str(player_index)] = rng.randi_range(0, 2)
+		_broadcast_rps_state(room)
+		if room.rps_choices.size() == room.rps_players.size():
+			_resolve_rps(room)
+		return
+	var winner: int = int(room.rps_players[0]) if outcome == 0 else int(room.rps_players[1])
+	room.game_state.current_player = winner
+	room.game_state.turns.start_at(winner, room.members.size())
+	room.phase = "playing"
+	_broadcast_rps_state(room)
+	_broadcast_turn(room)
+
+func _broadcast_rps_state(room: Dictionary) -> void:
+	_broadcast(room, Protocol.RPS_STATE, {
+		"phase": room.phase,
+		"players": room.rps_players.duplicate(),
+		"choices": room.rps_choices.duplicate(true),
+		"round": room.rps_round
+	})
+
+func _rps_winner(first: int, second: int) -> int:
+	if first == second:
+		return -1
+	return 0 if (first == 0 and second == 2) or (first == 1 and second == 0) or (first == 2 and second == 1) else 1
 
 func _play_cards(peer_id: int, payload: Dictionary) -> void:
 	var room = _room_for_peer(peer_id)
@@ -403,6 +477,9 @@ func _send_deals(room: Dictionary) -> void:
 			"player_count": room.members.size(),
 			"round_number": room.round_number,
 			"phase": room.phase,
+			"rps_players": room.rps_players.duplicate(),
+			"rps_choices": room.rps_choices.duplicate(true),
+			"rps_round": room.rps_round,
 			"hand": _serialize_hand(hand),
 			"role": str(room.roles_by_player.get(i, "")),
 			"exchange_return_count": room.exchange.pending_amount_for(i) if room.exchange != null else 0,

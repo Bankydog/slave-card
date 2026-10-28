@@ -29,6 +29,9 @@ var local_player_index := -1
 var online_player_index := -1
 var online_round := 0
 var online_phase := "lobby"
+var rps_players: Array = []
+var rps_choices: Dictionary = {}
+var rps_round := 1
 var online_players: Array = []
 var online_hand: Array[CardData] = []
 var online_rules := GameRulesScript.new()
@@ -71,8 +74,8 @@ func _ready() -> void:
 
 func _clear_screen() -> void:
 	var host := get_parent()
-	if host.has_method("set_table_background_enabled"):
-		host.set_table_background_enabled(false)
+	if host.has_method("set_title_screen_enabled"):
+		host.set_title_screen_enabled(true)
 	for child in get_children():
 		if child != endpoint:
 			remove_child(child)
@@ -118,13 +121,14 @@ func _root_box(title_text: String) -> VBoxContainer:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_theme_constant_override("separation", roundi((4.0 if _is_compact_view() else 12.0) * _display_scale()))
 	add_child(root)
-	var heading := Label.new()
-	heading.text = title_text
-	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	heading.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	heading.custom_minimum_size.y = 36.0 * _display_scale()
-	heading.add_theme_font_size_override("font_size", maxi(16, roundi((22.0 if _is_compact_view() else 32.0) * _display_scale())))
-	root.add_child(heading)
+	if not title_text.is_empty():
+		var heading := Label.new()
+		heading.text = title_text
+		heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		heading.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		heading.custom_minimum_size.y = 36.0 * _display_scale()
+		heading.add_theme_font_size_override("font_size", maxi(16, roundi((22.0 if _is_compact_view() else 32.0) * _display_scale())))
+		root.add_child(heading)
 	return root
 
 func _line_edit(parent: Control, value: String, hint: String, changed: Callable) -> LineEdit:
@@ -194,7 +198,7 @@ func _status(parent: Control) -> void:
 
 func _show_main_menu() -> void:
 	page = "main"
-	var root := _root_box("SLAVE CARD")
+	var root := _root_box("")
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(spacer)
@@ -215,6 +219,7 @@ func _show_create_room() -> void:
 	page = "create"
 	status_text = ""
 	var root := _root_box("Create Room")
+	root.alignment = BoxContainer.ALIGNMENT_CENTER
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	root.add_child(row)
@@ -243,6 +248,7 @@ func _show_join_room() -> void:
 	page = "join"
 	status_text = ""
 	var root := _root_box("Join Room")
+	root.alignment = BoxContainer.ALIGNMENT_CENTER
 	_labeled_line_edit(root, "Name", guest_name, "Guest name", _set_guest_name)
 	room_code_input = _line_edit(root, room_code, "6-character room code", _set_room_code)
 	_action_button(root, "Join Room", func(): _send_request(Protocol.JOIN_ROOM, {"name": _effective_guest_name(), "room_code": room_code.to_upper()}))
@@ -339,11 +345,15 @@ func _show_online_game() -> void:
 	if trading and exchange_role.begins_with("Slave ") and selected_card_ids.is_empty():
 		selected_card_ids = exchange_mandatory_ids.duplicate()
 	HandSorterScript.sort_hand(online_hand)
-	var title_text := "Round %d  ·  %s" % [online_round, "Card Exchange" if trading else "Playing"]
+	var title_text := "Round %d  ·  %s" % [online_round, "Card Exchange" if trading else ("3♣ Tie Break" if online_phase == "rps_tiebreak" else "Playing")]
 	var root := _root_box(title_text)
 	var host := get_parent()
-	if host.has_method("set_table_background_enabled"):
-		host.set_table_background_enabled(online_players.size() >= 2 and online_players.size() <= 4)
+	if host.has_method("set_game_background"):
+		host.set_game_background(online_players.size())
+	if online_phase == "rps_tiebreak":
+		_show_online_rps(root)
+		_enforce_text_minimum(root)
+		return
 	var current_cards: Array[CardData] = []
 	var serialized_cards: Array = online_snapshot.get("current_cards", [])
 	if serialized_cards.is_empty() and not online_snapshot.get("current_card", {}).is_empty():
@@ -476,6 +486,35 @@ func _show_online_game() -> void:
 	_status(root)
 	_enforce_text_minimum(root)
 
+func _show_online_rps(root: Control) -> void:
+	var heading := Label.new()
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.text = "Two players hold 3♣ · choose rock, paper, or scissors" if rps_round <= 1 else "Tie · choose again (round %d)" % rps_round
+	root.add_child(heading)
+	var choices := HBoxContainer.new()
+	choices.alignment = BoxContainer.ALIGNMENT_CENTER
+	choices.add_theme_constant_override("separation", roundi(12.0 * _display_scale()))
+	root.add_child(choices)
+	var local_is_tied := rps_players.has(online_player_index)
+	var already_chosen := rps_choices.has(str(online_player_index))
+	if local_is_tied and not already_chosen:
+		for choice in range(3):
+			var button := TextureButton.new()
+			button.texture_normal = TablePresentationScript.rps_texture(choice)
+			button.ignore_texture_size = true
+			button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+			button.custom_minimum_size = Vector2(110.0, 154.0) * _display_scale()
+			button.pressed.connect(_select_rps_choice.bind(choice))
+			choices.add_child(button)
+	else:
+		var waiting := Label.new()
+		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		waiting.text = "Your choice is locked. Waiting for the other player..." if already_chosen else "Waiting for the tied players to choose..."
+		root.add_child(waiting)
+
+func _select_rps_choice(choice: int) -> void:
+	_send_request(Protocol.SELECT_RPS, {"choice": choice})
+
 func _add_trade_progress(parent: Control) -> void:
 	var progress := HBoxContainer.new()
 	progress.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -506,6 +545,9 @@ func _show_results(payload: Dictionary) -> void:
 	page = "results"
 	online_roles = payload.get("roles_by_player", online_roles)
 	var root := _root_box("Round %d Results" % online_round)
+	var host := get_parent()
+	if host.has_method("set_game_background"):
+		host.set_game_background(online_players.size())
 	var heading := Label.new()
 	heading.text = "Finishing order"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -520,7 +562,7 @@ func _show_results(payload: Dictionary) -> void:
 		var line := Label.new()
 		line.text = "%s  —  %s" % [role, player_name]
 		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		root.add_child(line)
+		root.add_child(TablePresentationScript.make_role_summary_row(role, line, _display_scale()))
 	if bool(payload.get("previous_king_demoted", false)):
 		var demotion := Label.new()
 		demotion.text = "The previous King is now Slave 1."
@@ -602,6 +644,9 @@ func _on_server_message(message: Dictionary) -> void:
 			online_player_index = int(payload.get("player_index", online_player_index))
 			online_round = int(payload.get("round_number", online_round))
 			online_phase = str(payload.get("phase", online_phase))
+			rps_players = payload.get("rps_players", rps_players)
+			rps_choices = payload.get("rps_choices", rps_choices)
+			rps_round = int(payload.get("rps_round", rps_round))
 			return_card_count = int(payload.get("exchange_return_count", 0))
 			exchange_role = str(payload.get("exchange_role", payload.get("role", "")))
 			exchange_mandatory_ids.clear()
@@ -615,6 +660,13 @@ func _on_server_message(message: Dictionary) -> void:
 				online_hand.append(CardDataScript.from_dict(item))
 			selected_card_ids.clear()
 			_show_online_game()
+		Protocol.RPS_STATE:
+			rps_players = payload.get("players", rps_players)
+			rps_choices = payload.get("choices", {})
+			rps_round = int(payload.get("round", rps_round))
+			online_phase = str(payload.get("phase", online_phase))
+			if page == "game":
+				_show_online_game()
 		Protocol.TURN_CHANGED:
 			online_snapshot = payload
 			online_phase = str(payload.get("phase", online_phase))

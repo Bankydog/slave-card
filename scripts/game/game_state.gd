@@ -40,10 +40,23 @@ func start(player_count: int, seed_value: int = 0, starting_player: int = -1) ->
 	current_combination.clear()
 	current_card = null
 	last_player = -1
-	var first_player := starting_player if starting_player >= 0 and starting_player < player_count else rng.randi_range(0, player_count - 1)
+	var first_player := starting_player if starting_player >= 0 and starting_player < player_count else first_player_by_three_clubs()
 	turns.start_at(first_player, player_count)
 	current_player = turns.current_player
 	changed.emit()
+
+func first_player_by_three_clubs() -> int:
+	var holders := three_clubs_holders()
+	return int(holders[0]) if holders.size() == 1 else rng.randi_range(0, players.size() - 1)
+
+func three_clubs_holders() -> Array[int]:
+	var result: Array[int] = []
+	for player_index in range(players.size()):
+		for card: CardData in players[player_index].hand:
+			if card.rank == "3" and card.suit == "Clubs":
+				result.append(player_index)
+				break
+	return result
 
 func active_eligible_count() -> int:
 	var count := 0
