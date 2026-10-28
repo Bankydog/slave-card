@@ -14,9 +14,10 @@ var endpoint: ClientNetworkEndpoint
 var page := "main"
 var guest_name := "Guest"
 const PROFILE_PATH := "user://player_settings.cfg"
-const DEFAULT_SERVER_URL := "ws://127.0.0.1:10000"
+const DESKTOP_SERVER_URL := "ws://127.0.0.1:10000"
+const WEB_SERVER_URL := "wss://slave-card-server.onrender.com"
 const SERVER_URL_CONFIG_PATH := "res://config/server_url.cfg"
-var server_url := DEFAULT_SERVER_URL
+var server_url := DESKTOP_SERVER_URL
 var room_code := ""
 var room_max_players := 8
 var room_players: Array = []
@@ -56,11 +57,13 @@ func _ready() -> void:
 	var profile := ConfigFile.new()
 	if profile.load(PROFILE_PATH) == OK:
 		guest_name = str(profile.get_value("profile", "display_name", "Guest"))
-	var server_config := ConfigFile.new()
-	if server_config.load(SERVER_URL_CONFIG_PATH) == OK:
-		var configured_url := str(server_config.get_value("network", "server_url", DEFAULT_SERVER_URL)).strip_edges()
-		if not configured_url.is_empty():
-			server_url = configured_url
+	server_url = WEB_SERVER_URL if OS.has_feature("web") else DESKTOP_SERVER_URL
+	if not OS.has_feature("web"):
+		var server_config := ConfigFile.new()
+		if server_config.load(SERVER_URL_CONFIG_PATH) == OK:
+			var configured_url := str(server_config.get_value("network", "server_url", DESKTOP_SERVER_URL)).strip_edges()
+			if not configured_url.is_empty():
+				server_url = configured_url
 	_show_main_menu()
 
 func _clear_screen() -> void:
@@ -78,11 +81,30 @@ func _display_scale() -> float:
 func _is_compact_view() -> bool:
 	return DisplayServer.window_get_size().y < 500
 
+func _update_lobby_grid_columns(grid: GridContainer) -> void:
+	if not is_instance_valid(grid):
+		return
+	var width := get_viewport_rect().size.x
+	if width >= 1100.0:
+		grid.columns = 4
+	elif width >= 700.0 and not _is_compact_view():
+		grid.columns = 3
+	else:
+		grid.columns = 2
+
 func _set_guest_name(value: String) -> void:
 	guest_name = value
 	var profile := ConfigFile.new()
 	profile.set_value("profile", "display_name", value)
 	profile.save(PROFILE_PATH)
+
+func _set_room_code(value: String) -> void:
+	var normalized := value.strip_edges().to_upper()
+	room_code = normalized
+	if is_instance_valid(room_code_input) and room_code_input.text != normalized:
+		var caret_column := room_code_input.caret_column
+		room_code_input.text = normalized
+		room_code_input.caret_column = mini(caret_column, normalized.length())
 
 func get_display_name() -> String:
 	return _effective_guest_name()
@@ -111,8 +133,28 @@ func _line_edit(parent: Control, value: String, hint: String, changed: Callable)
 	edit.custom_minimum_size = Vector2(240, 40 if _is_compact_view() else 48) * _display_scale()
 	edit.add_theme_font_size_override("font_size", maxi(16, roundi(16.0 * _display_scale())))
 	edit.text_changed.connect(changed)
+	edit.gui_input.connect(_on_line_edit_gui_input.bind(edit))
 	parent.add_child(edit)
 	return edit
+
+func _on_line_edit_gui_input(event: InputEvent, edit: LineEdit) -> void:
+	if not OS.has_feature("web") or not event is InputEventKey:
+		return
+	var key_event := event as InputEventKey
+	if not key_event.pressed or key_event.echo or key_event.keycode != KEY_V:
+		return
+	if not key_event.ctrl_pressed and not key_event.meta_pressed:
+		return
+	# Let LineEdit/browser handling run first. If it did not insert anything, use
+	# Godot's clipboard bridge while this specific LineEdit still has focus.
+	call_deferred("_paste_clipboard_fallback", edit, edit.text)
+
+func _paste_clipboard_fallback(edit: LineEdit, original_text: String) -> void:
+	if not is_instance_valid(edit) or not edit.has_focus() or edit.text != original_text:
+		return
+	var clipboard_text := DisplayServer.clipboard_get()
+	if not clipboard_text.is_empty():
+		edit.insert_text_at_caret(clipboard_text)
 
 func _labeled_line_edit(parent: Control, label_text: String, value: String, hint: String, changed: Callable) -> LineEdit:
 	var label := Label.new()
@@ -154,7 +196,6 @@ func _show_main_menu() -> void:
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(spacer)
 	_labeled_line_edit(root, "Name", guest_name, "Guest name", _set_guest_name)
-	_labeled_line_edit(root, "Host", server_url, DEFAULT_SERVER_URL, func(value: String): server_url = value)
 	_action_button(root, "Single Player", func(): single_player_requested.emit())
 	_action_button(root, "Create Room", _show_create_room)
 	_action_button(root, "Join Room", _show_join_room)
@@ -168,11 +209,6 @@ func _show_create_room() -> void:
 	page = "create"
 	status_text = ""
 	var root := _root_box("Create Room")
-	var address := Label.new()
-	address.text = "Server: %s" % server_url
-	address.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	address.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	root.add_child(address)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	root.add_child(row)
@@ -202,8 +238,7 @@ func _show_join_room() -> void:
 	status_text = ""
 	var root := _root_box("Join Room")
 	_labeled_line_edit(root, "Name", guest_name, "Guest name", _set_guest_name)
-	_labeled_line_edit(root, "Host", server_url, DEFAULT_SERVER_URL, func(value: String): server_url = value)
-	room_code_input = _line_edit(root, room_code, "6-character room code", func(value: String): room_code = value.strip_edges().to_upper())
+	room_code_input = _line_edit(root, room_code, "6-character room code", _set_room_code)
 	_action_button(root, "Join Room", func(): _send_request(Protocol.JOIN_ROOM, {"name": _effective_guest_name(), "room_code": room_code.to_upper()}))
 	_action_button(root, "Back", _show_main_menu, 150)
 	_status(root)
@@ -221,19 +256,33 @@ func _show_lobby() -> void:
 	count_label.text = "%d / %d connected" % [room_players.size(), room_max_players]
 	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(count_label)
-	var list := VBoxContainer.new()
-	list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size.y = 80 if _is_compact_view() else 220
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.add_child(list)
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var centered := CenterContainer.new()
+	centered.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	centered.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.add_child(centered)
+	var grid := GridContainer.new()
+	grid.name = "LobbyPlayerGrid"
+	grid.add_theme_constant_override("h_separation", roundi(12.0 * _display_scale()))
+	grid.add_theme_constant_override("v_separation", roundi(10.0 * _display_scale()))
+	centered.add_child(grid)
 	root.add_child(scroll)
+	_update_lobby_grid_columns(grid)
+	scroll.resized.connect(_update_lobby_grid_columns.bind(grid))
 	for player in room_players:
+		var card := PanelContainer.new()
+		card.custom_minimum_size = Vector2(220.0, 54.0) * _display_scale()
 		var line := Label.new()
 		var badge := "Host" if bool(player.get("is_host", false)) else ("Bot" if bool(player.get("is_bot", false)) else "Guest")
 		line.text = "%s  ·  %s" % [str(player.get("name", "Guest")), badge]
 		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		list.add_child(line)
+		line.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		line.add_theme_font_size_override("font_size", maxi(16, roundi(18.0 * _display_scale())))
+		card.add_child(line)
+		grid.add_child(card)
 	if is_host:
 		var fill_bots := CheckBox.new()
 		fill_bots.text = "Fill empty seats with bots"
