@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: slave-card-server
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+
+  - type: web
+    name: slave-card-client
+    runtime: static
+    buildCommand: python3 tools/export_web.py --require-production-url
+    staticPublishPath: ./web-build
+    envVars:
+      - key: SLAVE_CARD_SERVER_URL
+        sync: false

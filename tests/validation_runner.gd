@@ -1,0 +1,752 @@
+extends Node
+
+const RoomServiceScript = preload("res://scripts/network/room_service.gd")
+const Protocol = preload("res://scripts/network/network_protocol.gd")
+const GameStateScript = preload("res://scripts/game/game_state.gd")
+const RoleSystemScript = preload("res://scripts/game/role_system.gd")
+const CardExchangeScript = preload("res://scripts/game/card_exchange.gd")
+const BotBrainScript = preload("res://scripts/ai/bot_brain.gd")
+const GameRulesScript = preload("res://scripts/game/game_rules.gd")
+const HandSorterScript = preload("res://scripts/cards/hand_sorter.gd")
+const CardViewScript = preload("res://scripts/ui/card_view.gd")
+const TablePresentationScript = preload("res://scripts/ui/table_presentation.gd")
+const MultiplayerFlowScript = preload("res://scripts/ui/multiplayer_flow.gd")
+
+var failures: Array[String] = []
+var messages_by_peer: Dictionary = {}
+
+func _ready() -> void:
+	_test_decks_and_deals()
+	_test_roles()
+	_test_exchange()
+	_test_trade_rules()
+	_test_entry_input_layout()
+	_test_trade_waiting_ui()
+	_test_server_trade_authority()
+	_test_turn_flow()
+	_test_round_starter()
+	_test_pass_regressions()
+	_test_bot_pass_turn_regression()
+	_test_combinations()
+	_test_suit_comparisons()
+	_test_selection_helpers()
+	_test_suit_selection_helpers()
+	_test_card_hover_visuals()
+	_test_table_presentation()
+	_test_bot_combinations()
+	_test_room_round(6)
+	_test_room_round(7)
+	_test_room_round(12)
+	_test_server_multi_card_validation()
+	_test_server_single_against_multi_card_server_validation()
+	_test_server_suit_validation()
+	_test_server_parity_validation()
+	if failures.is_empty():
+		print("VALIDATION PASS")
+		await get_tree().create_timer(3.0).timeout
+		get_tree().quit(0)
+	else:
+		for failure in failures:
+			push_error(failure)
+		print("VALIDATION FAIL: %d issue(s)" % failures.size())
+		await get_tree().create_timer(0.5).timeout
+		get_tree().quit(1)
+
+func _check(condition: bool, message: String) -> void:
+	if not condition:
+		failures.append(message)
+	else:
+		print("PASS: " + message)
+
+func _card(rank: String, suit: String = "Clubs", deck_index: int = 0) -> CardData:
+	return CardData.new(rank, suit, deck_index)
+
+func _ids(cards: Array) -> Array[String]:
+	var result: Array[String] = []
+	for card: CardData in cards:
+		result.append(card.card_id())
+	return result
+
+func _test_decks_and_deals() -> void:
+	for count in [2, 6, 7, 12]:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = count
+		var deck = DeckFactory.create_deck(count, rng)
+		var expected_decks := 1 if count <= 6 else 2
+		_check(deck.size() == expected_decks * 52, "%d players use the correct deck count" % count)
+		var hands = DeckFactory.deal(deck, count)
+		var total := 0
+		var unique := {}
+		for hand in hands:
+			total += hand.size()
+			for card: CardData in hand:
+				unique[card.card_id()] = true
+		_check(total == deck.size() and unique.size() == deck.size(), "%d-player deal assigns every unique card once" % count)
+		var min_hand := 999
+		var max_hand := 0
+		for hand in hands:
+			min_hand = mini(min_hand, hand.size())
+			max_hand = maxi(max_hand, hand.size())
+		_check(max_hand - min_hand <= 1, "%d-player hand sizes differ by at most one" % count)
+	var sorted: Array = [_card("2"), _card("3", "Spades"), _card("3", "Clubs")]
+	HandSorterScript.sort_hand(sorted)
+	_check(sorted[0].rank == "3" and sorted[1].rank == "3" and sorted[2].rank == "2" and sorted[0].suit == "Clubs" and sorted[1].suit == "Spades", "hand sorter orders ranks and uses the shared suit order")
+	var duplicate_sort: Array = [_card("3", "Spades", 1), _card("3", "Spades", 0), _card("3", "Diamonds")]
+	HandSorterScript.sort_hand(duplicate_sort)
+	_check(duplicate_sort[0].suit == "Diamonds" and duplicate_sort[1].deck_index == 0 and duplicate_sort[2].deck_index == 1, "duplicate identical cards use deck identity only as a final presentation sort")
+
+func _test_roles() -> void:
+	var order: Array[int] = []
+	for i in range(7):
+		order.append(i)
+	var result: Dictionary = RoleSystemScript.resolve(order, 7, {})
+	_check(result.ok and str(result.roles_by_player[0]) == "King", "first place receives King")
+	_check(str(result.roles_by_player[6]) == "Slave 1", "last place receives Slave 1")
+	_check(RoleSystemScript.role_order_for_count(7) == ["King", "Queen", "Seven", "4th", "Slave 3", "Slave 2", "Slave 1"], "seven-player role order includes King, Queen, Seven, and three Slaves")
+	var previous := {0:"King", 1:"Queen", 2:"Seven", 3:"4th", 4:"Slave 3", 5:"Slave 2", 6:"Slave 1"}
+	var lost_order: Array[int] = [1, 2, 3, 4, 5, 6, 0]
+	var lost: Dictionary = RoleSystemScript.resolve(lost_order, 7, previous)
+	_check(lost.previous_king_demoted and str(lost.roles_by_player[0]) == "Slave 1" and str(lost.roles_by_player[1]) == "King", "previous King loses and is demoted while winner becomes King")
+	var won_order: Array[int] = [0, 1, 2, 3, 4, 5, 6]
+	var won: Dictionary = RoleSystemScript.resolve(won_order, 7, previous)
+	_check(not won.previous_king_demoted and str(won.roles_by_player[0]) == "King", "previous King can win again and retain King")
+
+func _test_exchange() -> void:
+	var game = GameStateScript.new()
+	game.start(12, 1234)
+	var roles := {0:"King", 1:"Queen", 2:"Seven", 9:"Slave 3", 10:"Slave 2", 11:"Slave 1"}
+	var flags: Array[bool] = []
+	var before: Array[int] = []
+	for i in range(12):
+		flags.append(true)
+		before.append(game.players[i].hand.size())
+	var exchange = CardExchangeScript.new()
+	var result: Dictionary = exchange.begin(game.players, roles, flags)
+	var amounts := {}
+	for transfer in exchange.completed_transfers:
+		amounts[str(transfer.amount)] = true
+	var after: Array[int] = []
+	for player in game.players:
+		after.append(player.hand.size())
+	_check(result.ok and exchange.is_complete() and amounts.has("3") and amounts.has("2") and amounts.has("1"), "roles exchange exactly 3, 2, and 1 cards")
+	_check(before == after, "exchange preserves every hand size")
+
+func _test_trade_rules() -> void:
+	var game = GameStateScript.new()
+	game.start(7, 771)
+	var roles := {0:"King", 1:"Queen", 2:"Seven", 3:"4th", 4:"Slave 3", 5:"Slave 2", 6:"Slave 1"}
+	var bot_flags: Array[bool] = [false, false, false, false, false, false, false]
+	for player_index in range(7):
+		var hand: Array = []
+		for rank in ["3", "4", "5", "6", "7"]:
+			hand.append(_card(rank, "Clubs", player_index))
+		game.players[player_index].hand = hand
+	var exchange = CardExchangeScript.new()
+	var begin_result: Dictionary = exchange.begin(game.players, roles, bot_flags)
+	_check(begin_result.ok and not exchange.is_complete() and exchange.pending_returns.size() == 6, "trade waits for all six required role participants")
+	_check(exchange.pending_amount_for(0) == 3 and exchange.pending_amount_for(1) == 2 and exchange.pending_amount_for(2) == 1, "King, Queen, and Seven receive exact 3/2/1 return counts")
+	_check(exchange.mandatory_ids_for(6) == _ids(game.players[6].hand.slice(2, 5)), "Slave 1 is assigned its highest three cards")
+	_check(exchange.mandatory_ids_for(5) == _ids(game.players[5].hand.slice(3, 5)), "Slave 2 is assigned its highest two cards")
+	_check(exchange.mandatory_ids_for(4) == _ids(game.players[4].hand.slice(4, 5)), "Slave 3 is assigned its highest card")
+	var before_sizes: Array[int] = []
+	for player in game.players:
+		before_sizes.append(player.hand.size())
+	var slave_one_wrong := _ids(game.players[6].hand.slice(0, 3))
+	var rejected_slave: Dictionary = exchange.select_return_cards(6, slave_one_wrong, game.players)
+	_check(not rejected_slave.ok, "Slave cannot substitute lower cards for its mandatory highest cards")
+	var king_ids: Array[String] = [_ids(game.players[0].hand)[0], _ids(game.players[0].hand)[2], _ids(game.players[0].hand)[4]]
+	var queen_ids: Array[String] = [_ids(game.players[1].hand)[1], _ids(game.players[1].hand)[3]]
+	var seven_ids: Array[String] = [_ids(game.players[2].hand)[4]]
+	exchange.select_return_cards(0, king_ids, game.players)
+	exchange.select_return_cards(1, queen_ids, game.players)
+	exchange.select_return_cards(2, seven_ids, game.players)
+	exchange.select_return_cards(6, exchange.mandatory_ids_for(6), game.players)
+	exchange.select_return_cards(5, exchange.mandatory_ids_for(5), game.players)
+	_check(not exchange.is_complete() and exchange.readiness_by_role()["King"] == "Ready" and exchange.readiness_by_role()["Slave 1"] == "Ready", "confirmed traders become ready while trade still waits for remaining roles")
+	exchange.select_return_cards(4, exchange.mandatory_ids_for(4), game.players)
+	var after_sizes: Array[int] = []
+	for player in game.players:
+		after_sizes.append(player.hand.size())
+	_check(exchange.is_complete() and exchange.completed_transfers.size() == 3, "all three exchanges commit together after every role is ready")
+	_check(before_sizes == after_sizes, "completed role trades preserve every hand size")
+	_check(_contains_all_ids(game.players[0].hand, exchange.completed_transfers[0].given_card_ids), "King receives Slave 1's server-selected highest cards")
+	var sorted_hands := true
+	for player in game.players:
+		for i in range(1, player.hand.size()):
+			sorted_hands = sorted_hands and player.hand[i - 1].strength() <= player.hand[i].strength()
+	_check(sorted_hands, "all hands are sorted after the completed trade")
+	_check(not exchange.is_participant(3), "players outside the six exchange roles are marked as nonparticipants")
+
+func _contains_all_ids(hand: Array, ids: Array) -> bool:
+	var owned := {}
+	for card: CardData in hand:
+		owned[card.card_id()] = true
+	for id in ids:
+		if not owned.has(str(id)):
+			return false
+	return true
+
+func _test_entry_input_layout() -> void:
+	var flow = MultiplayerFlowScript.new()
+	add_child(flow)
+	var name_label: Label = flow.find_child("NameLabel", true, false)
+	var host_label: Label = flow.find_child("HostLabel", true, false)
+	var name_input: LineEdit = flow.find_child("NameInput", true, false)
+	var host_input: LineEdit = flow.find_child("HostInput", true, false)
+	var single_button: Button = flow.find_child("Action_SinglePlayer", true, false)
+	_check(name_label != null and name_label.visible and name_label.text == "Name", "entry screen shows a visible Name label")
+	_check(host_label != null and host_label.visible and host_label.text == "Host", "entry screen shows a visible Host label")
+	_check(name_input != null and single_button != null and is_equal_approx(name_input.custom_minimum_size.x, single_button.custom_minimum_size.x), "Name input width matches the main action button width")
+	_check(host_input != null and single_button != null and is_equal_approx(host_input.custom_minimum_size.x, single_button.custom_minimum_size.x), "Host input width matches the main action button width")
+	flow.free()
+
+func _test_trade_waiting_ui() -> void:
+	var flow = MultiplayerFlowScript.new()
+	add_child(flow)
+	flow.online_phase = "card_exchange"
+	flow.online_round = 2
+	flow.online_player_index = 3
+	flow.online_players = [
+		{"name":"King"}, {"name":"Queen"}, {"name":"Seven"}, {"name":"Guest"},
+		{"name":"Slave 3"}, {"name":"Slave 2"}, {"name":"Slave 1"}
+	]
+	flow.exchange_role = "4th"
+	flow.exchange_participant = false
+	flow.exchange_readiness = {"King":"Ready", "Queen":"Selecting", "Seven":"Ready", "Slave 1":"Ready", "Slave 2":"Ready", "Slave 3":"Selecting"}
+	flow._show_online_game()
+	_check(flow.find_child("TradeWaiting", true, false) != null and flow.find_child("TradeWaiting", true, false).text == "Waiting for card exchange...", "nonparticipant sees Waiting Trade instead of a playable hand")
+	_check(flow.find_child("TradeStatus_King", true, false) != null, "trade waiting screen shows role readiness progress")
+	flow.exchange_role = "King"
+	flow.exchange_participant = true
+	flow.exchange_readiness["King"] = "Ready"
+	flow._show_online_game()
+	_check(flow.find_child("TradeWaiting", true, false) != null and flow.find_child("TradeWaiting", true, false).text == "Waiting Trade", "confirmed trader sees Waiting Trade and cannot edit cards")
+	flow.exchange_role = "Slave 1"
+	flow.exchange_participant = true
+	flow.return_card_count = 3
+	flow.exchange_readiness["Slave 1"] = "Selecting"
+	flow.online_hand.clear()
+	flow.online_hand.append_array([_card("3"), _card("4"), _card("5"), _card("6")])
+	flow.exchange_mandatory_ids.clear()
+	flow.exchange_mandatory_ids.append_array([_ids(flow.online_hand)[1], _ids(flow.online_hand)[2], _ids(flow.online_hand)[3]])
+	flow.selected_card_ids.clear()
+	flow._show_online_game()
+	_check(flow.selected_card_ids == flow.exchange_mandatory_ids, "Slave hand automatically selects the server-mandated highest cards")
+	flow._toggle_card(flow.exchange_mandatory_ids[0])
+	_check(flow.selected_card_ids.size() == 3, "Slave cannot deselect a mandatory card")
+	flow.exchange_role = "King"
+	flow.return_card_count = 3
+	flow.exchange_mandatory_ids.clear()
+	flow.exchange_readiness["King"] = "Selecting"
+	flow.selected_card_ids.clear()
+	flow._show_online_game()
+	var confirm: Button = flow.find_child("ConfirmTradeButton", true, false)
+	_check(confirm != null and confirm.disabled, "upper-role Confirm Trade is disabled until exactly three cards are selected")
+	flow._toggle_card(_ids(flow.online_hand)[0])
+	flow._toggle_card(_ids(flow.online_hand)[1])
+	confirm = flow.find_child("ConfirmTradeButton", true, false)
+	_check(confirm != null and confirm.disabled, "upper role cannot confirm a partial trade")
+	flow._toggle_card(_ids(flow.online_hand)[2])
+	confirm = flow.find_child("ConfirmTradeButton", true, false)
+	_check(confirm != null and not confirm.disabled, "upper role can confirm after selecting exactly the required cards")
+	flow.free()
+
+func _test_server_trade_authority() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	var peers: Array[int] = [7800, 7801, 7802, 7803, 7804, 7805, 7806]
+	service.handle_message(peers[0], {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":7}})
+	var code := ""
+	for message in messages_by_peer.get(peers[0], []):
+		if message.type == Protocol.ROOM_CREATED:
+			code = str(message.payload.room_code)
+	for i in range(1, peers.size()):
+		service.handle_message(peers[i], {"type":Protocol.JOIN_ROOM, "payload":{"name":"Guest %d" % i, "room_code":code}})
+	service.handle_message(peers[0], {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	var room: Dictionary = service.rooms[code]
+	room.phase = "results"
+	room.round_number = 1
+	room.roles_by_player = {0:"King", 1:"Queen", 2:"Seven", 3:"4th", 4:"Slave 3", 5:"Slave 2", 6:"Slave 1"}
+	service._start_round(room)
+	var game: GameState = room.game_state
+	_check(room.phase == "card_exchange" and not room.exchange.is_complete(), "server holds the room in exchange until human role participants respond")
+	var initial_sizes: Array[int] = []
+	for player in game.players:
+		initial_sizes.append(player.hand.size())
+	var incorrect_slave_ids: Array[String] = []
+	for card: CardData in game.players[6].hand:
+		if not room.exchange.mandatory_ids_for(6).has(card.card_id()):
+			incorrect_slave_ids.append(card.card_id())
+			if incorrect_slave_ids.size() == 3:
+				break
+	service.handle_message(peers[6], {"type":Protocol.SELECT_CARDS, "payload":{"card_ids":incorrect_slave_ids}})
+	_check(room.phase == "card_exchange" and not bool(room.exchange.ready_by_player[6]) and initial_sizes[6] == game.players[6].hand.size(), "server rejects an incorrect Slave submission without changing hands or readiness")
+	for player_index in [0, 1, 2, 6, 5, 4]:
+		var ids: Array[String] = []
+		if player_index >= 4:
+			ids = room.exchange.mandatory_ids_for(player_index)
+		else:
+			var amount: int = room.exchange.pending_amount_for(player_index)
+			for card: CardData in game.players[player_index].hand:
+				ids.append(card.card_id())
+				if ids.size() == amount:
+					break
+		service.handle_message(peers[player_index], {"type":Protocol.SELECT_CARDS, "payload":{"card_ids":ids}})
+		if player_index != 4:
+			_check(room.phase == "card_exchange", "server waits for the remaining participants after player %d confirms" % (player_index + 1))
+	var final_sizes: Array[int] = []
+	for player in game.players:
+		final_sizes.append(player.hand.size())
+	_check(room.phase == "playing" and room.exchange.is_complete(), "server commits trade and starts play only after all six participants are ready")
+	_check(initial_sizes == final_sizes, "server-authoritative trade preserves hand sizes")
+	_check(room.exchange.readiness_by_role().size() == 6, "server publishes ready state for all six trade roles")
+
+func _test_turn_flow() -> void:
+	var game = GameStateScript.new()
+	game.start(4, 99)
+	game.players[0].hand = [_card("3"), _card("7")]
+	game.players[1].hand = [_card("4")]
+	game.players[2].hand = [_card("5"), _card("8")]
+	game.players[3].hand = [_card("6")]
+	game.players[1].finished = true
+	game.finishing_order.append(1)
+	game.current_player = 0
+	game.turns.start_at(0, 4)
+	_check(game.play_card(0, game.players[0].hand[0]) and game.current_player == 2, "turn order skips a finished player")
+	_check(game.play_card(2, game.players[2].hand[0]) and game.current_player == 3, "turn order advances after legal play")
+	_check(game.pass_turn(3) and game.current_player == 0 and not game.current_cards.is_empty(), "first pass advances without prematurely resetting the trick")
+	_check(game.pass_turn(0) and game.current_cards.is_empty() and game.current_player == 2 and game.last_player == -1, "trick resets to last active player only after all others pass")
+	_check(not game.passed[0] and not game.passed[1] and not game.passed[2] and not game.passed[3], "pass flags clear between tricks")
+	game.players[2].finished = true
+	game.finishing_order.append(2)
+	game.current_player = 0
+	game.last_player = 2
+	game.current_cards.assign([_card("7")])
+	game.passed[0] = false
+	game.passed[3] = true
+	_check(game.pass_turn(0) and game.current_player == 3 and game.current_cards.is_empty(), "finished last player is skipped when a trick resets")
+
+func _test_round_starter() -> void:
+	var game = GameStateScript.new()
+	game.start(4, 11, 2)
+	_check(game.current_player == 2 and game.turns.current_player == 2, "specified previous-round winner starts the next round")
+	game.start(4, 12, -1)
+	_check(game.current_player >= 0 and game.current_player < 4, "first round still chooses a valid random starter")
+
+func _test_pass_regressions() -> void:
+	var two_player = GameStateScript.new()
+	two_player.start(2, 201)
+	two_player.players[0].hand = [_card("8"), _card("9"), _card("10")]
+	two_player.players[1].hand = [_card("J")]
+	two_player.current_player = 0
+	two_player.turns.start_at(0, 2)
+	_check(two_player.play_card(0, two_player.players[0].hand[0]) and two_player.current_player == 1, "two-player lead advances to the other player")
+	_check(two_player.pass_turn(1) and two_player.current_cards.is_empty() and two_player.current_player == 0, "two-player pass resets to the last successful player")
+	_check(not two_player.passed[0] and not two_player.passed[1], "two-player reset clears both pass flags")
+	_check(two_player.play_card(0, two_player.players[0].hand[0]) and two_player.current_player == 1, "leader plays once after reset and gives the next turn to the opponent")
+
+	var mixed = GameStateScript.new()
+	mixed.start(4, 202)
+	mixed.players[0].hand = [_card("3"), _card("8")]
+	mixed.players[1].hand = [_card("4"), _card("9")]
+	mixed.players[2].hand = [_card("5"), _card("10")]
+	mixed.players[3].hand = [_card("6"), _card("J")]
+	mixed.current_player = 0
+	mixed.turns.start_at(0, 4)
+	_check(mixed.play_card(0, mixed.players[0].hand[0]) and mixed.current_player == 1, "four-player sequence starts at A then B")
+	_check(mixed.pass_turn(1) and mixed.current_player == 2, "B's pass advances to C without ending the trick")
+	_check(mixed.play_card(2, mixed.players[2].hand[0]) and mixed.current_player == 3, "C's higher play advances to D")
+	_check(mixed.pass_turn(3) and mixed.current_player == 0, "D's pass advances to A")
+	_check(mixed.pass_turn(0) and mixed.current_cards.is_empty() and mixed.current_player == 2, "trick resets only after A passes while B is already passed")
+	_check(not mixed.passed[0] and not mixed.passed[1] and not mixed.passed[2] and not mixed.passed[3], "mixed sequence clears all passes for the next trick")
+	_check(mixed.play_card(2, mixed.players[2].hand[0]) and mixed.current_player == 3, "C leads the new trick once and advances normally")
+
+func _test_bot_pass_turn_regression() -> void:
+	var game = GameStateScript.new()
+	game.start(2, 203)
+	game.players[0].hand = [_card("8")]
+	game.players[1].hand = [_card("9"), _card("J"), _card("Q")]
+	game.current_player = 1
+	game.turns.start_at(1, 2)
+	var bot = BotBrainScript.new()
+	var opening: Array = bot.choose_play(game.players[1].hand, [], game.rules)
+	_check(game.play_cards(1, opening) and game.current_player == 0, "bot's active play advances to its human opponent")
+	_check(game.pass_turn(0) and game.current_player == 1 and game.current_cards.is_empty(), "human pass resets the trick and gives the bot a new lead")
+	var next_lead: Array = bot.choose_play(game.players[1].hand, [], game.rules)
+	_check(game.play_cards(1, next_lead) and game.current_player == 0, "bot leads once after reset and advances back to the human")
+	var hand_size: int = game.players[1].hand.size()
+	_check(not game.play_cards(1, [_card("Q")]) and game.players[1].hand.size() == hand_size, "bot cannot take a consecutive turn after the human has received it")
+
+func _test_combinations() -> void:
+	var rules = GameRulesScript.new()
+	_check(rules.classify([_card("9")]).type == "Single", "recognizes Single")
+	_check(rules.classify([_card("9"), _card("9", "Hearts")]).type == "Pair", "recognizes Pair")
+	_check(rules.classify([_card("9"), _card("9", "Hearts"), _card("9", "Spades")]).type == "Triple", "recognizes Triple")
+	_check(rules.classify([_card("9"), _card("9", "Hearts"), _card("9", "Spades"), _card("9", "Diamonds")]).type == "Four of a Kind", "recognizes Four of a Kind")
+	_check(rules.classify([_card("9"), _card("10"), _card("J")]).type == "Straight", "recognizes Straight")
+	_check(not rules.classify([]).valid and not rules.classify([_card("9"), _card("10")]).valid, "rejects empty and wrong-count plays")
+	_check(not rules.classify([_card("9"), _card("9", "Hearts"), _card("10")]).valid, "rejects mixed-rank invalid combination")
+	_check(not rules.classify([_card("9"), _card("J"), _card("Q")]).valid, "rejects nonconsecutive Straight")
+	_check(not rules.classify([_card("A"), _card("2"), _card("3")]).valid, "Straight does not wrap rank order")
+	_check(rules.can_beat([_card("10")], [_card("9")]), "higher Single beats lower Single")
+	_check(rules.can_beat([_card("10"), _card("10", "Hearts")], [_card("9"), _card("9", "Hearts")]), "higher Pair beats lower Pair")
+	_check(rules.can_beat([_card("10"), _card("10", "Hearts"), _card("10", "Spades")], [_card("9"), _card("9", "Hearts"), _card("9", "Spades")]), "higher Triple beats lower Triple")
+	_check(rules.can_beat([_card("10"), _card("10", "Hearts"), _card("10", "Spades"), _card("10", "Diamonds")], [_card("9"), _card("9", "Hearts"), _card("9", "Spades"), _card("9", "Diamonds")]), "higher Four beats lower Four")
+	_check(rules.can_beat([_card("10"), _card("J"), _card("Q")], [_card("9"), _card("10", "Hearts"), _card("J", "Spades")]), "higher equal-length Straight beats lower Straight")
+	_check(not rules.can_beat([_card("9"), _card("9", "Hearts")], [_card("9", "Spades"), _card("9", "Diamonds")]), "rejects equal rank")
+	_check(not rules.can_beat([_card("8")], [_card("9")]), "rejects lower rank")
+	_check(not rules.can_beat([_card("4"), _card("4", "Hearts"), _card("4", "Spades")], [_card("8"), _card("8", "Hearts")]), "Pair cannot be answered by a Triple")
+	_check(rules.can_beat([_card("9"), _card("10"), _card("J")], [_card("8"), _card("8", "Hearts"), _card("8", "Spades")]), "higher Straight can answer a Triple")
+	_check(not rules.can_beat([_card("8")], [_card("7"), _card("7", "Hearts"), _card("7", "Spades")]), "Triple cannot be answered by a Single")
+	_check(not rules.can_beat([_card("8"), _card("8", "Hearts")], [_card("7"), _card("7", "Hearts"), _card("7", "Spades")]), "Triple cannot be answered by a Pair")
+	_check(not rules.can_beat([_card("4")], [_card("3"), _card("4"), _card("5")]), "three-card Straight cannot be answered by a Single")
+	_check(not rules.can_beat([_card("5"), _card("6"), _card("7"), _card("8")], [_card("3"), _card("4"), _card("5")]), "four-card even Straight cannot answer an odd-count Straight")
+	_check(rules.can_beat([_card("5"), _card("6"), _card("7"), _card("8"), _card("9")], [_card("3"), _card("4"), _card("5")]), "higher odd-count five-card Straight can answer a three-card Straight")
+	_check(rules.can_beat([_card("5"), _card("5", "Hearts"), _card("5", "Spades")], [_card("3"), _card("4"), _card("5")]), "Triple 555 beats Straight 345")
+	_check(not rules.can_beat([_card("4"), _card("4", "Hearts"), _card("4", "Spades")], [_card("3"), _card("4"), _card("5")]), "lower Triple cannot beat Straight 345")
+	_check(rules.can_beat([_card("8"), _card("8", "Hearts"), _card("8", "Spades")], [_card("7"), _card("7", "Hearts"), _card("7", "Spades")]), "higher Triple beats lower Triple")
+	_check(rules.can_beat([_card("5"), _card("6"), _card("7")], [_card("4"), _card("5"), _card("6")]), "higher same-length Straight beats lower Straight")
+	_check(not rules.can_beat([_card("5"), _card("5", "Hearts")], [_card("3")]), "Pair cannot be answered by a Single because even and odd counts cannot mix")
+	_check(not rules.can_beat([_card("3")], [_card("5"), _card("5", "Hearts")]), "Single cannot be answered by a Pair because odd and even counts cannot mix")
+	_check(not rules.can_beat([_card("8"), _card("8", "Hearts")], [_card("J"), _card("J", "Hearts")]), "same-type lower Pair is rejected")
+	_check(not rules.can_beat([_card("9"), _card("9", "Hearts")], [_card("9", "Spades"), _card("9", "Hearts")]), "same-type equal-strength Pair is rejected")
+	_check(not rules.can_beat([_card("9"), _card("9", "Hearts")], [_card("8")]), "Single cannot be answered by a Pair")
+	_check(not rules.can_beat([_card("9"), _card("10"), _card("J"), _card("Q")], [_card("8"), _card("9", "Hearts"), _card("10", "Spades")]), "rejects Straight with different length")
+	var configurable = GameRulesScript.new()
+	configurable.straight_allow_two = false
+	_check(not configurable.classify([_card("Q"), _card("K"), _card("A"), _card("2")]).valid, "straight configuration can exclude Two")
+
+func _test_suit_comparisons() -> void:
+	var rules = GameRulesScript.new()
+	_check(rules.compare_suit_strength("Clubs", "Diamonds") < 0 and rules.compare_suit_strength("Diamonds", "Hearts") < 0 and rules.compare_suit_strength("Hearts", "Spades") < 0, "shared suit order is Clubs < Diamonds < Hearts < Spades")
+	_check(not rules.can_beat([_card("3", "Clubs", 1)], [_card("3", "Clubs", 0)]), "equal Single rank and suit from another deck does not win")
+	_check(rules.can_beat([_card("3", "Diamonds")], [_card("3", "Clubs")]), "3 Diamonds beats 3 Clubs")
+	_check(rules.can_beat([_card("3", "Hearts")], [_card("3", "Diamonds")]), "3 Hearts beats 3 Diamonds")
+	_check(rules.can_beat([_card("3", "Spades")], [_card("3", "Hearts")]), "3 Spades beats 3 Hearts")
+	_check(rules.can_beat([_card("4", "Clubs")], [_card("3", "Spades")]), "higher Single rank beats any lower suit")
+	var pair_center: Array = [_card("5", "Spades"), _card("5", "Diamonds")]
+	var pair_winner: Array = [_card("5", "Spades", 1), _card("5", "Hearts")]
+	_check(rules.can_beat(pair_winner, pair_center), "equal-rank Pair compares strongest suit then second suit")
+	var pair_second_loses: Array = [_card("5", "Spades", 1), _card("5", "Diamonds", 1)]
+	var pair_second_center: Array = [_card("5", "Spades"), _card("5", "Hearts")]
+	_check(not rules.can_beat(pair_second_loses, pair_second_center), "Pair uses the second suit when strongest suits tie")
+	var pair_equal_decks: Array = [_card("5", "Spades", 1), _card("5", "Diamonds", 0)]
+	_check(not rules.can_beat(pair_equal_decks, pair_center), "identical Pair suit composition across decks is equal")
+	var triple_center: Array = [_card("7", "Spades"), _card("7", "Diamonds"), _card("7", "Clubs")]
+	var triple_winner: Array = [_card("7", "Spades", 1), _card("7", "Hearts"), _card("7", "Clubs", 1)]
+	_check(rules.can_beat(triple_winner, triple_center), "equal-rank Triple compares its complete suit sequence")
+	var triple_equal: Array = [_card("7", "Spades", 1), _card("7", "Diamonds", 1), _card("7", "Clubs", 1)]
+	_check(not rules.can_beat(triple_equal, triple_center), "identical Triple suit composition does not win")
+	var four_center: Array = [_card("8", "Spades"), _card("8", "Diamonds"), _card("8", "Diamonds", 1), _card("8", "Clubs")]
+	var four_winner: Array = [_card("8", "Spades", 1), _card("8", "Hearts"), _card("8", "Diamonds"), _card("8", "Clubs", 1)]
+	_check(rules.can_beat(four_winner, four_center), "equal-rank Four of a Kind compares the complete suit sequence")
+	_check(not rules.can_beat(four_center.duplicate(), four_center), "identical Four of a Kind suit composition does not win")
+	var straight_top_center: Array = [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Hearts")]
+	var straight_top_winner: Array = [_card("5", "Diamonds"), _card("6", "Clubs"), _card("7", "Spades")]
+	_check(rules.can_beat(straight_top_winner, straight_top_center), "equal-top-rank Straight uses the highest card suit")
+	var straight_lower_center: Array = [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Spades")]
+	var straight_lower_play: Array = [_card("5", "Hearts"), _card("6", "Clubs"), _card("7", "Spades", 1)]
+	_check(rules.can_beat(straight_lower_play, straight_lower_center), "Straight wins when at least one corresponding suit is higher")
+	var straight_equal_decks: Array = [_card("5", "Clubs", 1), _card("6", "Diamonds", 1), _card("7", "Spades", 1)]
+	_check(not rules.can_beat(straight_equal_decks, [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Spades")]), "identical Straight rank and suit sequence across decks is equal")
+	_check(not rules.can_beat([_card("5"), _card("6"), _card("7"), _card("8")], straight_lower_center), "Straight suit tie-break still requires the same card count")
+	_check(rules.compare_combinations(pair_winner, pair_center) > 0 and rules.compare_combinations(pair_center, pair_winner) < 0, "shared combination comparator returns consistent ordering")
+	_check(rules.list_legal_combinations_for_type([_card("3", "Diamonds"), _card("3", "Hearts")], [_card("3", "Clubs")], GameRulesScript.TYPE_SINGLE).size() == 2, "type-filtered legal-combination API supports future hints")
+
+func _test_suit_selection_helpers() -> void:
+	var rules = GameRulesScript.new()
+	var single_hand: Array = [_card("3", "Clubs"), _card("3", "Diamonds"), _card("3", "Hearts"), _card("3", "Spades"), _card("4", "Clubs")]
+	var singles: Dictionary = rules.selectable_card_ids(single_hand, [_card("3", "Diamonds")], [])
+	_check(singles.size() == 5, "Single assistance includes cards in higher Singles and larger odd-count combinations")
+	var pair_hand: Array = [_card("5", "Clubs"), _card("5", "Diamonds", 1), _card("5", "Spades", 1), _card("5", "Hearts")]
+	var pair_selectable: Dictionary = rules.selectable_card_ids(pair_hand, [_card("5", "Spades"), _card("5", "Diamonds")], [])
+	_check(pair_selectable.size() == 4, "Pair assistance includes cards in winning Pairs and larger even-count combinations")
+	var triple_hand: Array = [_card("7", "Spades", 1), _card("7", "Hearts", 1), _card("7", "Clubs", 1)]
+	var triple_selectable: Dictionary = rules.selectable_card_ids(triple_hand, [_card("7", "Spades"), _card("7", "Diamonds"), _card("7", "Clubs")], [])
+	_check(triple_selectable.size() == 3, "Triple helper recognizes a legal equal-rank suit-sequence win")
+	var straight_hand: Array = [_card("5", "Clubs", 1), _card("6", "Clubs"), _card("6", "Hearts"), _card("7", "Spades", 1)]
+	var straight_selectable: Dictionary = rules.selectable_card_ids(straight_hand, [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Spades")], [])
+	_check(straight_selectable.size() == 3 and not straight_selectable.has(_card("6", "Clubs").card_id()), "Straight assistance enables only cards in higher same-length Straights")
+	var four_hand: Array = [_card("8", "Spades", 1), _card("8", "Hearts"), _card("8", "Diamonds"), _card("8", "Clubs", 1)]
+	var four_selectable: Dictionary = rules.selectable_card_ids(four_hand, [_card("8", "Spades"), _card("8", "Diamonds"), _card("8", "Diamonds", 1), _card("8", "Clubs")], [])
+	_check(four_selectable.size() == 4, "Four of a Kind helper uses suit-sequence comparison")
+
+func _test_selection_helpers() -> void:
+	var rules = GameRulesScript.new()
+	var hand: Array = [_card("8"), _card("9", "Hearts"), _card("10"), _card("J"), _card("J", "Hearts"), _card("Q"), _card("Q", "Hearts"), _card("Q", "Spades"), _card("K"), _card("K", "Hearts"), _card("K", "Spades"), _card("K", "Diamonds"), _card("9", "Spades"), _card("10", "Hearts"), _card("J", "Spades")]
+	var single_only_hand: Array = [_card("8"), _card("10")]
+	var single_only: Dictionary = rules.selectable_card_ids(single_only_hand, [_card("9", "Hearts")], [])
+	_check(not single_only.has(_card("8").card_id()) and single_only.has(_card("10").card_id()), "Single response assistance blocks lower Singles and enables a higher Single")
+	var pair_only_hand: Array = [_card("8"), _card("8", "Hearts"), _card("10"), _card("10", "Hearts")]
+	var pair_only: Dictionary = rules.selectable_card_ids(pair_only_hand, [_card("9"), _card("9", "Diamonds")], [])
+	_check(pair_only.has(_card("10").card_id()) and pair_only.has(_card("10", "Hearts").card_id()) and not pair_only.has(_card("8").card_id()), "Pair response assistance enables higher Pairs and blocks lower Pairs")
+	var triples: Dictionary = rules.selectable_card_ids(hand, [_card("9"), _card("9", "Diamonds"), _card("9", "Spades")], [])
+	_check(triples.has(_card("Q").card_id()) and triples.has(_card("Q", "Hearts").card_id()), "Triple assist finds higher rank cards")
+	var fours: Dictionary = rules.selectable_card_ids(hand, [_card("9"), _card("9", "Diamonds"), _card("9", "Spades"), _card("9", "Hearts")], [])
+	_check(fours.has(_card("K").card_id()) and fours.has(_card("K", "Diamonds").card_id()), "Four assist finds higher rank cards")
+	var straights: Dictionary = rules.selectable_card_ids(hand, [_card("7"), _card("8", "Hearts"), _card("9", "Diamonds")], [])
+	_check(straights.has(_card("8").card_id()) and straights.has(_card("10").card_id()), "Straight assist finds cards in higher equal-length sequences")
+	var odd_switch_hand: Array = [_card("4"), _card("5"), _card("6")]
+	var odd_switch: Dictionary = rules.selectable_card_ids(odd_switch_hand, [_card("2", "Spades")], [])
+	_check(odd_switch.size() == 3, "UI assistance allows a higher odd-count Straight against a Single")
+	var even_switch_hand: Array = [_card("3"), _card("4"), _card("5"), _card("6")]
+	var even_switch: Dictionary = rules.selectable_card_ids(even_switch_hand, [_card("2", "Spades"), _card("2", "Diamonds")], [])
+	_check(even_switch.size() == 4, "UI assistance allows a higher even-count Straight against a Pair")
+	_check(rules.selectable_card_ids([_card("3"), _card("3", "Hearts")], [_card("2", "Spades")], []).is_empty(), "UI assistance blocks Pair cards against a Single")
+	_check(rules.selectable_card_ids([_card("8")], [_card("7"), _card("7", "Hearts"), _card("7", "Spades")], []).is_empty(), "UI assistance blocks a Single against a Triple")
+	var partial: Dictionary = rules.selectable_card_ids(hand, [_card("9"), _card("9", "Diamonds")], [_card("J").card_id()])
+	_check(partial.has(_card("J", "Hearts").card_id()) and partial.has(_card("J", "Spades").card_id()) and partial.has(_card("10").card_id()), "partial Pair selection also keeps cards completing a higher even-count combination")
+	var partial_straight: Dictionary = rules.selectable_card_ids(hand, [_card("7"), _card("8", "Hearts"), _card("9", "Diamonds")], [_card("8").card_id()])
+	_check(partial_straight.has(_card("10").card_id()) and partial_straight.has(_card("Q").card_id()), "partial Straight selection retains cards completing a higher odd-count combination")
+
+func _test_card_hover_visuals() -> void:
+	var card_view: CardView = CardViewScript.new()
+	card_view.setup(_card("9", "Hearts"))
+	var normal: StyleBoxFlat = card_view.get_theme_stylebox("normal")
+	var hover: StyleBoxFlat = card_view.get_theme_stylebox("hover")
+	_check(normal.bg_color == hover.bg_color and normal.border_color == hover.border_color, "hover keeps the card face and border unchanged")
+	_check(card_view.get_theme_color("font_color") == card_view.get_theme_color("font_hover_color"), "hover keeps rank and suit ink unchanged")
+	var unselected_face: StyleBoxFlat = card_view.get_theme_stylebox("normal")
+	card_view.setup(_card("9", "Hearts"), true)
+	var selected_normal: StyleBoxFlat = card_view.get_theme_stylebox("normal")
+	var selected_hover: StyleBoxFlat = card_view.get_theme_stylebox("hover")
+	_check(selected_normal.bg_color == selected_hover.bg_color and selected_normal.bg_color == unselected_face.bg_color, "selected card face stays unchanged during selection and hover")
+	var hand_row := HBoxContainer.new()
+	CardViewScript.add_hand_slot(hand_row, card_view, true)
+	_check(card_view.position.y == 0.0, "selected card lift is vertical only")
+	hand_row.free()
+
+func _test_table_presentation() -> void:
+	for count in [2, 6, 7, 12]:
+		var positions: Array[Vector2] = TablePresentationScript.normalized_seat_positions(count)
+		var valid: bool = positions.size() == count and positions[0].x == 0.5 and positions[0].y > 0.7
+		for position in positions:
+			valid = valid and position.x >= 0.0 and position.x <= 1.0 and position.y >= 0.0 and position.y <= 1.0
+		_check(valid, "%d-player table has visible in-bounds seats with local player at bottom" % count)
+	var red_card: CardView = CardViewScript.new()
+	red_card.setup(_card("Q", "Hearts"), false, true)
+	_check(red_card.top_rank.text == "Q" and red_card.center_suit.text == "♥" and red_card.get_node("FaceMarks").get_child_count() == 2, "card face shows one top-left rank and one centered suit without duplicate corner marks")
+	_check(red_card.top_rank.get_theme_font_size("font_size") >= 16 and red_card.center_suit.get_theme_font_size("font_size") >= 16, "card face text never falls below 16 px")
+	red_card.set_available(false)
+	_check(red_card.top_rank.visible and red_card.center_suit.visible and red_card.top_rank.text == "Q" and red_card.center_suit.text == "♥", "disabled card face retains readable rank and center suit")
+	var flow = MultiplayerFlowScript.new()
+	flow.guest_name = "Ari"
+	_check(flow.get_display_name() == "Ari", "entered display name is available to single-player and room flows")
+	flow.guest_name = "   "
+	_check(flow.get_display_name() == "Guest", "empty display name falls back to Guest")
+	flow.free()
+	var table: Control = TablePresentationScript.new()
+	add_child(table)
+	table.configure([{"name":"Ari", "card_count":5, "role":"King"}], 0, 0, [], [], "Lead a combination", false)
+	_check("Ari" in table.name_labels[0].text and table.name_labels[0].get_theme_font_size("font_size") >= 16 and table.detail_labels[0].get_theme_font_size("font_size") >= 16 and table.status_labels[0].get_theme_font_size("font_size") >= 16, "table shows the player's name with readable text at or above 16 px")
+	table.queue_free()
+	var suit_checks := [
+		{"suit":"Hearts", "symbol":"♥", "color":Color("#b51f36")},
+		{"suit":"Diamonds", "symbol":"♦", "color":Color("#b51f36")},
+		{"suit":"Spades", "symbol":"♠", "color":Color("#17212b")},
+		{"suit":"Clubs", "symbol":"♣", "color":Color("#17212b")}
+	]
+	for item in suit_checks:
+		var suit_view: CardView = CardViewScript.new()
+		suit_view.setup(_card("A", item.suit), false, true)
+		_check(suit_view.center_suit.text == item.symbol and suit_view.center_suit.get_theme_color("font_color") == item.color, "%s suit renders with the expected symbol and color" % item.suit)
+		suit_view.free()
+	var combinations: Array = [
+		{"name":"Single", "cards":[_card("3")]},
+		{"name":"Pair", "cards":[_card("4"), _card("4", "Hearts")]},
+		{"name":"Triple", "cards":[_card("5"), _card("5", "Hearts"), _card("5", "Spades")]},
+		{"name":"Four of a Kind", "cards":[_card("6"), _card("6", "Hearts"), _card("6", "Spades"), _card("6", "Diamonds")]},
+		{"name":"Straight", "cards":[_card("7"), _card("8"), _card("9"), _card("10"), _card("J")]}
+	]
+	for combination in combinations:
+		var pile: Control = CardViewScript.make_pile(combination.cards, true)
+		var cluster: Control = pile.get_child(0)
+		var overlapped := true
+		for i in range(cluster.get_child_count()):
+			var view: CardView = cluster.get_child(i)
+			if absf(view.rotation_degrees) < 0.1:
+				overlapped = false
+			if i > 0:
+				var previous: CardView = cluster.get_child(i - 1)
+				if view.position.x - previous.position.x >= view.size.x:
+					overlapped = false
+		_check(cluster.get_child_count() == combination.cards.size() and overlapped, "%s renders as a rotated overlapping center cluster" % combination.name)
+		pile.free()
+
+func _test_bot_combinations() -> void:
+	var rules = GameRulesScript.new()
+	var bot = BotBrainScript.new()
+	var hand: Array = [_card("3"), _card("3", "Hearts"), _card("4"), _card("4", "Hearts"), _card("5"), _card("6"), _card("7")]
+	var lead: Array = bot.choose_play(hand, [], rules)
+	_check(not lead.is_empty() and rules.classify(lead).valid and int(rules.classify(lead).high_rank) == 0, "bot leads with a legal lowest-value combination")
+	var pair_hand: Array = [_card("3"), _card("10"), _card("10", "Hearts"), _card("J"), _card("J", "Hearts"), _card("Q"), _card("Q", "Hearts")]
+	var response: Array = bot.choose_play(pair_hand, [_card("9"), _card("9", "Hearts")], rules)
+	_check(rules.classify(response).type == "Pair" and int(rules.classify(response).high_rank) == 7, "bot prefers the lowest same-type Pair to a lower Single")
+	var triple_hand: Array = [_card("10"), _card("10", "Hearts"), _card("10", "Spades"), _card("J"), _card("J", "Hearts"), _card("J", "Spades")]
+	var triple_play: Array = bot.choose_play(triple_hand, [_card("9"), _card("9", "Hearts"), _card("9", "Spades")], rules)
+	_check(rules.classify(triple_play).type == "Triple" and int(rules.classify(triple_play).high_rank) == 7, "bot responds with the lowest valid Triple")
+	var four_hand: Array = [_card("10"), _card("10", "Hearts"), _card("10", "Spades"), _card("10", "Diamonds"), _card("J"), _card("J", "Hearts"), _card("J", "Spades"), _card("J", "Diamonds")]
+	var four_play: Array = bot.choose_play(four_hand, [_card("9"), _card("9", "Hearts"), _card("9", "Spades"), _card("9", "Diamonds")], rules)
+	_check(rules.classify(four_play).type == "Four of a Kind" and int(rules.classify(four_play).high_rank) == 7, "bot responds with the lowest valid Four")
+	var straight_hand: Array = [_card("7"), _card("8"), _card("9"), _card("10"), _card("J")]
+	var straight_play: Array = bot.choose_play(straight_hand, [_card("6"), _card("7", "Hearts"), _card("8", "Spades")], rules)
+	_check(rules.classify(straight_play).type == "Straight" and int(rules.classify(straight_play).high_rank) == 6, "bot responds with the lowest valid Straight")
+	var cross_type: Array = bot.choose_play([_card("4"), _card("5"), _card("6")], [_card("Q"), _card("Q", "Hearts")], rules)
+	_check(cross_type.is_empty(), "bot passes when it has no legal response with the same combination type and count")
+	var no_response: Array = bot.choose_play([_card("3"), _card("4")], [_card("A")], rules)
+	_check(no_response.is_empty(), "bot passes when it cannot respond")
+	var parity_switch: Array = bot.choose_play([_card("4"), _card("5"), _card("6")], [_card("2", "Spades")], rules)
+	_check(rules.classify(parity_switch).type == "Straight" and parity_switch.size() == 3, "bot can switch from a Single to a higher odd-count Straight")
+	var multi_card_single: Array = bot.choose_play([_card("8"), _card("9"), _card("10")], [_card("7"), _card("7", "Hearts"), _card("7", "Spades")], rules)
+	_check(rules.classify(multi_card_single).type == "Straight" and multi_card_single.size() == 3, "bot returns a higher three-card combination instead of a Single against a Triple")
+	var straight_single: Array = bot.choose_play([_card("8"), _card("9"), _card("10")], [_card("4"), _card("5"), _card("6")], rules)
+	_check(rules.classify(straight_single).type == "Straight" and straight_single.size() == 3, "bot returns a higher three-card combination against a Straight")
+	var suit_response_hand: Array = [_card("8", "Clubs"), _card("8", "Hearts"), _card("9", "Clubs")]
+	var suit_response: Array = bot.choose_play(suit_response_hand, [_card("8", "Diamonds")], rules)
+	_check(suit_response.size() == 1 and suit_response[0].rank == "8" and suit_response[0].suit == "Hearts", "bot uses suit strength and chooses 8 Hearts over 9 Clubs")
+	var pair_suit_hand: Array = [_card("8", "Spades", 1), _card("8", "Hearts"), _card("9", "Clubs"), _card("9", "Diamonds")]
+	var pair_suit_response: Array = bot.choose_play(pair_suit_hand, [_card("8", "Spades"), _card("8", "Diamonds")], rules)
+	_check(rules.classify(pair_suit_response).type == "Pair" and int(rules.classify(pair_suit_response).high_rank) == 5, "bot chooses the lowest rank pair whose suit sequence beats the center")
+
+func _test_room_round(count: int) -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	var peer := 600 + count
+	service.handle_message(peer, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":count}})
+	var code := ""
+	for message in messages_by_peer.get(peer, []):
+		if message.type == Protocol.ROOM_CREATED:
+			code = str(message.payload.room_code)
+	service.handle_message(peer, {"type":Protocol.START_GAME, "payload":{"fill_bots":true}})
+	var room: Dictionary = service.rooms[code]
+	for member in room.members:
+		member.is_bot = true
+		member.peer_id = 0
+	var guard := 0
+	while room.phase == "playing" and guard < 10000:
+		service.tick(0.5)
+		guard += 1
+	_check(room.phase == "results" and room.game_state.finishing_order.size() == count, "%d-player bot game completes with finishing order" % count)
+	_check(str(room.roles_by_player[room.game_state.finishing_order[0]]) == "King" and str(room.roles_by_player[room.game_state.finishing_order[count - 1]]) == "Slave 1", "%d-player round assigns King and Slave 1" % count)
+	var expected_next_starter: int = room.game_state.finishing_order[0]
+	if count >= 7:
+		var slaves := {}
+		for role in room.roles_by_player.values():
+			if str(role).begins_with("Slave"):
+				slaves[str(role)] = true
+		_check(slaves.size() == 3, "%d-player results include all three Slave roles" % count)
+		service.handle_message(peer, {"type":Protocol.START_NEXT_ROUND, "payload":{}})
+		_check(room.phase == "playing" and room.round_number == 2 and room.exchange.is_complete(), "%d-player room starts next round and completes exchange" % count)
+		var amounts := {}
+		for transfer in room.exchange.completed_transfers:
+			amounts[str(transfer.amount)] = true
+		_check(amounts.has("3") and amounts.has("2") and amounts.has("1"), "%d-player second round applies 3/2/1 exchanges" % count)
+	else:
+		service.handle_message(peer, {"type":Protocol.START_NEXT_ROUND, "payload":{}})
+		_check(room.phase == "playing" and room.round_number == 2, "six-player room starts another round")
+	_check(room.game_state.current_player == expected_next_starter, "%d-player next round starts with the previous round winner" % count)
+
+func _test_server_multi_card_validation() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(501, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":2}})
+	var code := ""
+	for message in messages_by_peer.get(501, []):
+		if message.type == Protocol.ROOM_CREATED:
+			code = str(message.payload.room_code)
+	service.handle_message(502, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Friend", "room_code":code}})
+	service.handle_message(501, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	var room: Dictionary = service.rooms[code]
+	_check(room.members.size() == 2 and room.phase == "playing", "host creates room, second player joins, and host starts the game")
+	var game: GameState = room.game_state
+	game.current_player = 0
+	game.turns.start_at(0, 2)
+	game.players[0].hand = [_card("9"), _card("9", "Hearts"), _card("J"), _card("J", "Hearts"), _card("Q"), _card("Q", "Hearts")]
+	game.players[1].hand = [_card("4"), _card("4", "Hearts"), _card("4", "Spades"), _card("10"), _card("10", "Hearts"), _card("7", "Diamonds")]
+	service.handle_message(501, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":_ids([game.players[0].hand[0], game.players[0].hand[1]])}})
+	_check(game.players[0].hand.size() == 4 and game.current_cards.size() == 2, "server accepts an owned Pair lead")
+	service.handle_message(502, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":_ids([_card("4"), _card("4", "Hearts"), _card("4", "Spades")])}})
+	_check(game.current_player == 1 and game.players[1].hand.size() == 6 and game.current_combination.type == "Pair", "server rejects a cross-type Triple against the active Pair")
+	service.handle_message(502, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":_ids([_card("10"), _card("10", "Hearts")])}})
+	_check(game.current_player == 0 and game.players[1].hand.size() == 4 and game.current_combination.type == "Pair", "server accepts a higher same-type Pair")
+	service.handle_message(501, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":_ids([_card("J"), _card("J", "Hearts")])}})
+	_check(game.current_player == 1 and game.current_combination.type == "Pair", "server accepts the next higher same-type Pair")
+	var before: int = game.players[1].hand.size()
+	service.handle_message(502, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":_ids([_card("4"), _card("4", "Hearts"), _card("4", "Spades")])}})
+	_check(game.players[1].hand.size() == before and game.current_player == 1 and game.current_combination.type == "Pair", "server rejects a cross-type Triple without mutating state")
+	service.handle_message(502, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":_ids([_card("4"), _card("7", "Diamonds")])}})
+	_check(game.players[1].hand.size() == before, "server rejects an invalid mixed-rank submission")
+	service.handle_message(502, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":_ids([_card("4"), _card("4")])}})
+	_check(game.players[1].hand.size() == before, "server rejects duplicate card IDs without state mutation")
+	service.handle_message(502, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":"malformed"}})
+	_check(game.players[1].hand.size() == before, "server rejects malformed card list without state mutation")
+
+func _test_server_suit_validation() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(881, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":2}})
+	var code := ""
+	for message in messages_by_peer.get(881, []):
+		if message.type == Protocol.ROOM_CREATED:
+			code = str(message.payload.room_code)
+	service.handle_message(882, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Friend", "room_code":code}})
+	service.handle_message(881, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	var room: Dictionary = service.rooms[code]
+	var game: GameState = room.game_state
+	game.players[0].hand = [_card("3", "Clubs"), _card("4", "Clubs")]
+	game.players[1].hand = [_card("3", "Clubs", 1), _card("3", "Diamonds"), _card("4", "Clubs")]
+	game.current_player = 0
+	game.turns.start_at(0, 2)
+	service.handle_message(881, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":[_card("3", "Clubs").card_id()]}})
+	var before_size: int = game.players[1].hand.size()
+	service.handle_message(882, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":[_card("3", "Clubs", 1).card_id()]}})
+	_check(game.current_player == 1 and game.players[1].hand.size() == before_size and game.current_cards[0].suit == "Clubs", "server rejects an equal-strength duplicate card from the other deck without changing state")
+	service.handle_message(882, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":[_card("3", "Diamonds").card_id()]}})
+	_check(game.players[1].hand.size() == before_size - 1 and game.current_cards[0].suit == "Diamonds", "server accepts a same-rank higher-suit Single")
+
+func _test_server_parity_validation() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(883, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":2}})
+	var code := ""
+	for message in messages_by_peer.get(883, []):
+		if message.type == Protocol.ROOM_CREATED:
+			code = str(message.payload.room_code)
+	service.handle_message(884, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Friend", "room_code":code}})
+	service.handle_message(883, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	var room: Dictionary = service.rooms[code]
+	var game: GameState = room.game_state
+	game.players[1].hand = [_card("7", "Spades"), _card("10")]
+	game.current_cards = [_card("4", "Clubs"), _card("5", "Diamonds"), _card("6", "Hearts")]
+	game.current_combination = game.rules.classify(game.current_cards)
+	game.current_player = 1
+	game.turns.start_at(1, 2)
+	var before_size: int = game.players[1].hand.size()
+	service.handle_message(884, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":[_card("7", "Spades").card_id()]}})
+	_check(game.players[1].hand.size() == before_size and str(game.current_combination.get("type", "")) == "Straight" and game.current_cards.size() == 3, "server rejects a malicious Single against an active Straight without mutating state")
+
+func _test_server_single_against_multi_card_server_validation() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(885, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":2}})
+	var code := ""
+	for message in messages_by_peer.get(885, []):
+		if message.type == Protocol.ROOM_CREATED:
+			code = str(message.payload.room_code)
+	service.handle_message(886, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Friend", "room_code":code}})
+	service.handle_message(885, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	var room: Dictionary = service.rooms[code]
+	var game: GameState = room.game_state
+	game.players[1].hand = [_card("8"), _card("10")]
+	game.current_cards = [_card("7"), _card("7", "Hearts"), _card("7", "Spades")]
+	game.current_combination = game.rules.classify(game.current_cards)
+	game.current_player = 1
+	game.turns.start_at(1, 2)
+	var before_size: int = game.players[1].hand.size()
+	service.handle_message(886, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":[_card("8").card_id()]}})
+	_check(game.players[1].hand.size() == before_size and str(game.current_combination.get("type", "")) == "Triple" and game.current_cards.size() == 3, "server rejects a malicious Single against an active Triple without mutating state")
+
+func _capture_message(peer_id: int, message: Dictionary) -> void:
+	if not messages_by_peer.has(peer_id):
+		messages_by_peer[peer_id] = []
+	messages_by_peer[peer_id].append(message)

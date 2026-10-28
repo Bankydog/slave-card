@@ -1,0 +1,82 @@
+runner started
+bot created
+starting count 2
+creating deck
+deck created 52
+creating state
+starting state
+state started
+hands counted 52
+bot mode set
+turn 0 current 1
+turn 1 current 0
+turn 2 current 1
+turn 3 current 0
+turn 4 current 1
+turn 5 current 0
+turn 6 current 1
+turn 7 current 0
+turn 8 current 1
+turn 9 current 0
+PASS players=2 decks=1 cards=52 turns=57 King=Player 2 Slave=You
+starting count 6
+creating deck
+deck created 52
+creating state
+starting state
+state started
+hands counted 52
+bot mode set
+turn 0 current 4
+turn 1 current 5
+turn 2 current 0
+turn 3 current 1
+turn 4 current 2
+turn 5 current 3
+turn 6 current 4
+turn 7 current 5
+turn 8 current 0
+turn 9 current 1
+PASS players=6 decks=1 cards=52 turns=89 King=Player 5 Slave=Player 4
+starting count 7
+creating deck
+deck created 104
+creating state
+starting state
+state started
+hands counted 104
+bot mode set
+turn 0 current 1
+turn 1 current 2
+turn 2 current 3
+turn 3 current 4
+turn 4 current 5
+turn 5 current 6
+turn 6 current 0
+turn 7 current 1
+turn 8 current 2
+turn 9 current 3
+PASS players=7 decks=2 cards=104 turns=199 King=You Slave=Player 4
+starting count 12
+creating deck
+deck created 104
+creating state
+starting state
+state started
+hands counted 104
+bot mode set
+turn 0 current 7
+turn 1 current 8
+turn 2 current 9
+turn 3 current 10
+turn 4 current 11
+turn 5 current 0
+turn 6 current 1
+turn 7 current 2
+turn 8 current 3
+turn 9 current 4
+PASS players=12 decks=2 cards=104 turns=282 King=Player 8 Slave=Player 10
+PASS passing and trick reset
+PASS finished players are skipped
+PASS reset after finished last player
+PASS all simulations and flow checks

@@ -1,0 +1,12 @@
+[gd_scene format=3 uid="uid://dk6k27ecinhdp"]
+
+[ext_resource type="Script" uid="uid://bpadcbi1cw5v6" path="res://tests/network_client_runner.gd" id="1_gu442"]
+[ext_resource type="Script" uid="uid://dbx84mf74hrr8" path="res://scripts/network/client_network_endpoint.gd" id="2_4crk3"]
+
+[node name="Main" type="Node" unique_id=961617198]
+script = ExtResource("1_gu442")
+
+[node name="MultiplayerFlow" type="Node" parent="." unique_id=623541082]
+
+[node name="NetworkEndpoint" type="Node" parent="MultiplayerFlow" unique_id=2049015788]
+script = ExtResource("2_4crk3")

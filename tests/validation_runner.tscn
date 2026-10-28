@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://bmskt3mn6xcr7"]
+
+[ext_resource type="Script" uid="uid://b67bag6t300uj" path="res://tests/validation_runner.gd" id="1_redcn"]
+
+[node name="ValidationRunner" type="Node" unique_id=1037740462]
+script = ExtResource("1_redcn")

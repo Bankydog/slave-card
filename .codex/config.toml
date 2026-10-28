@@ -1,0 +1,4 @@
+[mcp_servers.godot]
+command = "cmd"
+args = ["/c", "C:\\Users\\padet_s\\Documents\\slave-card\\scripts\\start-godot-mcp.cmd"]
+cwd = "C:\\Users\\padet_s\\Documents\\slave-card"
