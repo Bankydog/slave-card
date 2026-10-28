@@ -21,6 +21,9 @@ var server_url := DESKTOP_SERVER_URL
 var room_code := ""
 var room_max_players := 8
 var room_players: Array = []
+var lobby_all_ready := false
+var lobby_ready_count := 0
+var lobby_human_count := 0
 var is_host := false
 var local_player_index := -1
 var online_player_index := -1
@@ -277,18 +280,26 @@ func _show_lobby() -> void:
 		card.custom_minimum_size = Vector2(220.0, 54.0) * _display_scale()
 		var line := Label.new()
 		var badge := "Host" if bool(player.get("is_host", false)) else ("Bot" if bool(player.get("is_bot", false)) else "Guest")
-		line.text = "%s  ·  %s" % [str(player.get("name", "Guest")), badge]
+		var ready_text := "Ready" if bool(player.get("ready", false)) else "Not Ready"
+		line.text = "%s  ·  %s  ·  %s" % [str(player.get("name", "Guest")), badge, ready_text]
 		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		line.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		line.add_theme_font_size_override("font_size", maxi(16, roundi(18.0 * _display_scale())))
 		card.add_child(line)
 		grid.add_child(card)
+	var ready_summary := Label.new()
+	ready_summary.text = "Ready %d / %d" % [lobby_ready_count, lobby_human_count]
+	ready_summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(ready_summary)
+	var local_ready := local_player_index >= 0 and local_player_index < room_players.size() and bool(room_players[local_player_index].get("ready", false))
+	_action_button(root, "Cancel Ready" if local_ready else "Ready", func(): _send_request(Protocol.SET_READY, {"ready": not local_ready}))
 	if is_host:
 		var fill_bots := CheckBox.new()
 		fill_bots.text = "Fill empty seats with bots"
 		fill_bots.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		root.add_child(fill_bots)
-		_action_button(root, "Start Game", func(): _send_request(Protocol.START_GAME, {"fill_bots": fill_bots.button_pressed}))
+		var start_button := _action_button(root, "Start Game", func(): _send_request(Protocol.START_GAME, {"fill_bots": fill_bots.button_pressed}))
+		start_button.disabled = not lobby_all_ready
 	else:
 		var waiting := Label.new()
 		waiting.text = "Waiting for the host to start"
@@ -353,7 +364,14 @@ func _show_online_game() -> void:
 		else:
 			info.text = "Waiting for card exchange..."
 	else:
-		info.text = "Your turn" if int(online_snapshot.get("current_player", -1)) == online_player_index else "Waiting for the current player"
+		if int(online_snapshot.get("current_player", -1)) == online_player_index:
+			info.text = "Your turn"
+		else:
+			var current_index := int(online_snapshot.get("current_player", -1))
+			var current_name := "the current player"
+			if current_index >= 0 and current_index < online_players.size():
+				current_name = str(online_players[current_index].get("name", current_name))
+			info.text = "Waiting for %s" % current_name
 	root.add_child(info)
 
 	if trading:
@@ -544,16 +562,19 @@ func _on_server_message(message: Dictionary) -> void:
 			room_players = payload.get("players", [])
 			local_player_index = int(payload.get("your_player_index", -1))
 			is_host = bool(payload.get("is_host", is_host))
+			lobby_all_ready = bool(payload.get("all_ready", false))
+			lobby_ready_count = int(payload.get("ready_count", 0))
+			lobby_human_count = int(payload.get("human_count", room_players.size()))
 			if page == "lobby" or page == "create" or page == "join":
 				_show_lobby()
 		Protocol.START_GAME:
+			online_snapshot.clear()
+			online_center_card_ids.clear()
 			online_round = int(payload.get("round_number", online_round + 1))
 			online_phase = str(payload.get("phase", "playing"))
 			online_players = payload.get("players", online_players)
 			online_roles = payload.get("roles_by_player", online_roles)
 		Protocol.DEAL:
-			online_snapshot.clear()
-			online_center_card_ids.clear()
 			online_player_index = int(payload.get("player_index", online_player_index))
 			online_round = int(payload.get("round_number", online_round))
 			online_phase = str(payload.get("phase", online_phase))

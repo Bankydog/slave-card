@@ -29,6 +29,8 @@ func handle_message(peer_id: int, message: Dictionary) -> void:
 			_leave_room(peer_id)
 		Protocol.START_GAME:
 			_start_game(peer_id, payload)
+		Protocol.SET_READY:
+			_set_ready(peer_id, payload)
 		Protocol.START_NEXT_ROUND:
 			_start_next_round(peer_id)
 		Protocol.PLAY_CARDS:
@@ -77,7 +79,7 @@ func _create_room(peer_id: int, payload: Dictionary) -> void:
 	var max_players := clampi(int(payload.get("max_players", 8)), 2, 12)
 	var code := _new_room_code()
 	var name := _guest_name(str(payload.get("name", "")))
-	var member := {"peer_id": peer_id, "name": name, "is_bot": false}
+	var member := {"peer_id": peer_id, "name": name, "is_bot": false, "ready": false}
 	var room := {
 		"code": code,
 		"host_peer": peer_id,
@@ -111,7 +113,7 @@ func _join_room(peer_id: int, payload: Dictionary) -> void:
 	if room.members.size() >= int(room.max_players):
 		_reject(peer_id, "This room is full.")
 		return
-	var member := {"peer_id": peer_id, "name": _guest_name(str(payload.get("name", ""))), "is_bot": false}
+	var member := {"peer_id": peer_id, "name": _guest_name(str(payload.get("name", ""))), "is_bot": false, "ready": false}
 	room.members.append(member)
 	room_by_peer[peer_id] = code
 	var player_index: int = room.members.size() - 1
@@ -162,15 +164,37 @@ func _start_game(peer_id: int, payload: Dictionary) -> void:
 	if room.phase != "lobby":
 		_reject(peer_id, "The game is already running.")
 		return
+	if not _all_humans_ready(room):
+		_reject(peer_id, "All human players must be Ready before starting.")
+		return
 	var fill_bots := bool(payload.get("fill_bots", false))
-	if fill_bots:
-		while room.members.size() < int(room.max_players):
-			room.members.append({"peer_id": 0, "name": "Bot %d" % next_bot_name, "is_bot": true})
-			next_bot_name += 1
-	if room.members.size() < 2:
+	var final_count: int = int(room.max_players) if fill_bots else room.members.size()
+	if final_count < 2:
 		_reject(peer_id, "At least two seats are needed. Add bots or invite a player.")
 		return
+	if fill_bots:
+		while room.members.size() < int(room.max_players):
+			room.members.append({"peer_id": 0, "name": "Bot %d" % next_bot_name, "is_bot": true, "ready": true})
+			next_bot_name += 1
 	_start_round(room)
+
+func _set_ready(peer_id: int, payload: Dictionary) -> void:
+	var room = _room_for_peer(peer_id)
+	if room == null or room.phase != "lobby":
+		_reject(peer_id, "Ready can only be changed while in a lobby.")
+		return
+	var player_index := _player_index_for_peer(room, peer_id)
+	if player_index < 0 or bool(room.members[player_index].get("is_bot", false)):
+		_reject(peer_id, "Only a human lobby player can change Ready.")
+		return
+	room.members[player_index]["ready"] = bool(payload.get("ready", false))
+	_broadcast_lobby(room)
+
+func _all_humans_ready(room: Dictionary) -> bool:
+	for member in room.members:
+		if not bool(member.get("is_bot", false)) and not bool(member.get("ready", false)):
+			return false
+	return true
 
 func _start_next_round(peer_id: int) -> void:
 	var room = _room_for_peer(peer_id)
@@ -436,17 +460,28 @@ func _public_players(room: Dictionary) -> Array[Dictionary]:
 			"name": member.name,
 			"is_bot": member.is_bot,
 			"is_host": int(member.peer_id) > 0 and int(member.peer_id) == int(room.host_peer),
+			"ready": bool(member.get("is_bot", false)) or bool(member.get("ready", false)),
 			"role": str(room.roles_by_player.get(i, ""))
 		})
 	return result
 
 func _broadcast_lobby(room: Dictionary) -> void:
+	var human_count := 0
+	var ready_count := 0
+	for member in room.members:
+		if not bool(member.get("is_bot", false)):
+			human_count += 1
+			if bool(member.get("ready", false)):
+				ready_count += 1
 	var payload := {
 		"room_code": room.code,
 		"max_players": room.max_players,
 		"phase": room.phase,
 		"round_number": room.round_number,
-		"players": _public_players(room)
+		"players": _public_players(room),
+		"ready_count": ready_count,
+		"human_count": human_count,
+		"all_ready": ready_count == human_count and human_count > 0
 	}
 	for player_index in range(room.members.size()):
 		var peer_id: int = int(room.members[player_index].peer_id)

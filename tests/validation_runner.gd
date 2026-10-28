@@ -34,6 +34,7 @@ func _ready() -> void:
 	_test_card_hover_visuals()
 	_test_table_presentation()
 	_test_bot_combinations()
+	_test_server_ready_authority()
 	_test_room_round(6)
 	_test_room_round(7)
 	_test_room_round(12)
@@ -65,6 +66,45 @@ func _ids(cards: Array) -> Array[String]:
 	var result: Array[String] = []
 	for card: CardData in cards:
 		result.append(card.card_id())
+	return result
+
+func _ready_peers(service, peers: Array[int]) -> void:
+	for peer_id in peers:
+		service.handle_message(peer_id, {"type":Protocol.SET_READY, "payload":{"ready":true}})
+
+func _test_server_ready_authority() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(910, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":4}})
+	var code := ""
+	for message in messages_by_peer.get(910, []):
+		if message.type == Protocol.ROOM_CREATED:
+			code = str(message.payload.room_code)
+	service.handle_message(911, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Guest", "room_code":code}})
+	service.handle_message(911, {"type":Protocol.SET_READY, "payload":{"ready":true}})
+	service.handle_message(910, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	_check(service.rooms[code].phase == "lobby" and _last_message(910, Protocol.ACTION_REJECTED).payload.reason == "All human players must be Ready before starting.", "server rejects start when host is Not Ready")
+	service.handle_message(910, {"type":Protocol.SET_READY, "payload":{"ready":true}})
+	service.handle_message(911, {"type":Protocol.SET_READY, "payload":{"ready":false}})
+	service.handle_message(910, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	_check(service.rooms[code].phase == "lobby", "server rejects start when joiner is Not Ready")
+	service.handle_message(911, {"type":Protocol.SET_READY, "payload":{"ready":true}})
+	service.handle_message(912, {"type":Protocol.JOIN_ROOM, "payload":{"name":"New guest", "room_code":code}})
+	_check(not bool(service.rooms[code].members[2].ready), "new human joins Not Ready")
+	service.handle_message(910, {"type":Protocol.START_GAME, "payload":{"fill_bots":true}})
+	_check(service.rooms[code].phase == "lobby", "new Not Ready player blocks server start even with bot fill")
+	service.handle_message(912, {"type":Protocol.SET_READY, "payload":{"ready":true}})
+	service.handle_message(910, {"type":Protocol.START_GAME, "payload":{"fill_bots":true}})
+	_check(service.rooms[code].phase == "playing" and service.rooms[code].members.size() == 4 and bool(service.rooms[code].members[3].get("ready", false)), "all Ready humans can start and bots are automatically Ready")
+	var host_lobby := _last_message(910, Protocol.LOBBY_STATE)
+	var guest_lobby := _last_message(911, Protocol.LOBBY_STATE)
+	_check(host_lobby.payload.all_ready and guest_lobby.payload.all_ready and host_lobby.payload.ready_count == guest_lobby.payload.ready_count, "readiness summary is broadcast identically to clients")
+
+func _last_message(peer_id: int, message_type: String) -> Dictionary:
+	var result := {}
+	for message in messages_by_peer.get(peer_id, []):
+		if message.type == message_type:
+			result = message
 	return result
 
 func _test_decks_and_deals() -> void:
@@ -262,6 +302,7 @@ func _test_server_trade_authority() -> void:
 			code = str(message.payload.room_code)
 	for i in range(1, peers.size()):
 		service.handle_message(peers[i], {"type":Protocol.JOIN_ROOM, "payload":{"name":"Guest %d" % i, "room_code":code}})
+	_ready_peers(service, peers)
 	service.handle_message(peers[0], {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
 	var room: Dictionary = service.rooms[code]
 	room.phase = "results"
@@ -617,6 +658,7 @@ func _test_room_round(count: int) -> void:
 	for message in messages_by_peer.get(peer, []):
 		if message.type == Protocol.ROOM_CREATED:
 			code = str(message.payload.room_code)
+	_ready_peers(service, [peer])
 	service.handle_message(peer, {"type":Protocol.START_GAME, "payload":{"fill_bots":true}})
 	var room: Dictionary = service.rooms[code]
 	for member in room.members:
@@ -655,6 +697,7 @@ func _test_server_multi_card_validation() -> void:
 		if message.type == Protocol.ROOM_CREATED:
 			code = str(message.payload.room_code)
 	service.handle_message(502, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Friend", "room_code":code}})
+	_ready_peers(service, [501, 502])
 	service.handle_message(501, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
 	var room: Dictionary = service.rooms[code]
 	_check(room.members.size() == 2 and room.phase == "playing", "host creates room, second player joins, and host starts the game")
@@ -690,6 +733,7 @@ func _test_server_suit_validation() -> void:
 		if message.type == Protocol.ROOM_CREATED:
 			code = str(message.payload.room_code)
 	service.handle_message(882, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Friend", "room_code":code}})
+	_ready_peers(service, [881, 882])
 	service.handle_message(881, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
 	var room: Dictionary = service.rooms[code]
 	var game: GameState = room.game_state
@@ -713,6 +757,7 @@ func _test_server_parity_validation() -> void:
 		if message.type == Protocol.ROOM_CREATED:
 			code = str(message.payload.room_code)
 	service.handle_message(884, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Friend", "room_code":code}})
+	_ready_peers(service, [883, 884])
 	service.handle_message(883, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
 	var room: Dictionary = service.rooms[code]
 	var game: GameState = room.game_state
@@ -734,6 +779,7 @@ func _test_server_single_against_multi_card_server_validation() -> void:
 		if message.type == Protocol.ROOM_CREATED:
 			code = str(message.payload.room_code)
 	service.handle_message(886, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Friend", "room_code":code}})
+	_ready_peers(service, [885, 886])
 	service.handle_message(885, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
 	var room: Dictionary = service.rooms[code]
 	var game: GameState = room.game_state
