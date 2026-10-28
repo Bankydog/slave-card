@@ -109,14 +109,14 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 		flight_card.size = Vector2(card_width, card_height)
 		flight_card.pivot_offset = Vector2(card_width, card_height) * 0.5
 		flight_card.position = source - Vector2(card_width, card_height) * 0.5
-		flight_card.scale = Vector2(0.68, 0.68)
+		flight_card.scale = Vector2(0.58, 0.58)
 		play_flight_layer.add_child(flight_card)
 		var target_card := pile_cards.get_child(i) as Control
 		var destination := play_flight_layer.get_global_transform().affine_inverse() * target_card.global_position
-		var delay := float(i) * 0.045
-		play_animation_tween.tween_property(flight_card, "position", destination, 0.34).set_delay(delay).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		play_animation_tween.tween_property(flight_card, "scale", Vector2.ONE, 0.34).set_delay(delay).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		play_animation_tween.tween_property(flight_card, "rotation", target_card.rotation, 0.34).set_delay(delay)
+		var delay := float(i) * 0.035
+		play_animation_tween.tween_property(flight_card, "position", destination, 0.42).set_delay(delay).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		play_animation_tween.tween_property(flight_card, "scale", Vector2.ONE, 0.42).set_delay(delay).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		play_animation_tween.tween_property(flight_card, "rotation", target_card.rotation, 0.42).set_delay(delay)
 	play_animation_tween.finished.connect(_finish_card_flight.bind(animation_token))
 
 func _finish_card_flight(animation_token: int) -> void:
@@ -249,7 +249,7 @@ static func normalized_seat_positions(player_count: int, compact: bool = false, 
 	result.resize(count)
 	result[0] = Vector2(0.5, 0.86)
 	var opponents := count - 1
-	if count == 4:
+	if count >= 2 and count <= 4:
 		var chair_positions: Array[Vector2] = [Vector2(0.5, 0.88), Vector2(0.9, 0.52), Vector2(0.5, 0.18), Vector2(0.1, 0.52)]
 		var normalized_local_index := posmod(local_index, count)
 		for i in range(count):

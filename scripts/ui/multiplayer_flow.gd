@@ -207,6 +207,9 @@ func _show_main_menu() -> void:
 	bottom.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(bottom)
 	_enforce_text_minimum(root)
+	var host := get_parent()
+	if host.has_method("set_title_screen_enabled"):
+		host.set_title_screen_enabled(true)
 
 func _show_create_room() -> void:
 	page = "create"
@@ -340,7 +343,7 @@ func _show_online_game() -> void:
 	var root := _root_box(title_text)
 	var host := get_parent()
 	if host.has_method("set_table_background_enabled"):
-		host.set_table_background_enabled(online_players.size() == 4)
+		host.set_table_background_enabled(online_players.size() >= 2 and online_players.size() <= 4)
 	var current_cards: Array[CardData] = []
 	var serialized_cards: Array = online_snapshot.get("current_cards", [])
 	if serialized_cards.is_empty() and not online_snapshot.get("current_card", {}).is_empty():

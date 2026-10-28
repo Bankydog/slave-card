@@ -8,6 +8,9 @@ const RoleSystemScript = preload("res://scripts/game/role_system.gd")
 const CardExchangeScript = preload("res://scripts/game/card_exchange.gd")
 const HandSorterScript = preload("res://scripts/cards/hand_sorter.gd")
 const TablePresentationScript = preload("res://scripts/ui/table_presentation.gd")
+const TITLE_TEXTURE = preload("res://assets/idle/title.png")
+const TABLE_FOUR_TEXTURE = preload("res://assets/background/table-4.png")
+const TABLE_MANY_TEXTURE = preload("res://assets/background/table-12.png")
 
 var state
 var bot := BotBrainScript.new()
@@ -155,7 +158,11 @@ func _start_local_round() -> void:
 	_refresh()
 
 func _build_table() -> void:
-	set_table_background_enabled(player_count == 4)
+	set_table_background_enabled(player_count >= 2 and player_count <= 4)
+	if player_count >= 2 and player_count <= 4:
+		table_background.texture = TABLE_FOUR_TEXTURE
+	else:
+		table_background.texture = TABLE_MANY_TEXTURE
 	var root := VBoxContainer.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_theme_constant_override("separation", roundi((4.0 if _is_compact_view() else 10.0) * _display_scale()))
@@ -408,6 +415,15 @@ func _show_results() -> void:
 func set_table_background_enabled(enabled: bool) -> void:
 	if is_instance_valid(table_background):
 		table_background.visible = enabled
+
+func set_title_screen_enabled(enabled: bool) -> void:
+	if not is_instance_valid(table_background):
+		return
+	if enabled:
+		table_background.texture = TITLE_TEXTURE
+		table_background.visible = true
+	elif table_background.texture == TITLE_TEXTURE:
+		table_background.visible = false
 
 func _display_scale() -> float:
 	return CARD_VIEW.display_scale(get_viewport_rect().size)
