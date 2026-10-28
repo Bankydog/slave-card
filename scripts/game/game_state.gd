@@ -4,18 +4,22 @@ extends RefCounted
 signal changed
 
 const HandSorterScript = preload("res://scripts/cards/hand_sorter.gd")
+const GameRulesScript = preload("res://scripts/game/game_rules.gd")
+const TurnManagerScript = preload("res://scripts/game/turn_manager.gd")
+const DeckFactoryScript = preload("res://scripts/cards/deck_factory.gd")
+const CardDataScript = preload("res://scripts/cards/card_data.gd")
 
 var players: Array[Dictionary] = []
 var current_player := 0
-var current_cards: Array[CardData] = []
+var current_cards: Array = []
 var current_combination: Dictionary = {}
 # Kept for compatibility with single-card displays and older callers.
-var current_card: CardData
+var current_card
 var last_player := -1
 var passed: Array[bool] = []
 var finishing_order: Array[int] = []
-var rules := GameRules.new()
-var turns := TurnManager.new()
+var rules = GameRulesScript.new()
+var turns = TurnManagerScript.new()
 var rng := RandomNumberGenerator.new()
 
 func start(player_count: int, seed_value: int = 0, starting_player: int = -1) -> void:
@@ -23,8 +27,8 @@ func start(player_count: int, seed_value: int = 0, starting_player: int = -1) ->
 		rng.randomize()
 	else:
 		rng.seed = seed_value
-	var deck := DeckFactory.create_deck(player_count, rng)
-	var hands := DeckFactory.deal(deck, player_count)
+	var deck := DeckFactoryScript.create_deck(player_count, rng)
+	var hands := DeckFactoryScript.deal(deck, player_count)
 	players.clear()
 	finishing_order.clear()
 	for i in range(player_count):
@@ -48,7 +52,7 @@ func active_eligible_count() -> int:
 			count += 1
 	return count
 
-func play_card(player_index: int, card: CardData) -> bool:
+func play_card(player_index: int, card) -> bool:
 	return play_cards(player_index, [card])
 
 func play_cards(player_index: int, requested_cards: Array) -> bool:
@@ -57,17 +61,17 @@ func play_cards(player_index: int, requested_cards: Array) -> bool:
 	if player_index != current_player or players[player_index].finished or passed[player_index]:
 		return false
 	var hand: Array = players[player_index].hand
-	var chosen: Array[CardData] = []
+	var chosen: Array = []
 	var requested_ids := {}
 	for requested in requested_cards:
-		if not requested is CardData:
+		if not requested is CardDataScript:
 			return false
 		var card_id: String = requested.card_id()
 		if requested_ids.has(card_id):
 			return false
 		requested_ids[card_id] = true
-		var owned_card: CardData
-		for item: CardData in hand:
+		var owned_card
+		for item in hand:
 			if item.card_id() == card_id:
 				owned_card = item
 				break

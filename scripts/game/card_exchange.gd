@@ -127,7 +127,7 @@ func select_return_cards(player_index: int, card_ids: Array, players: Array[Dict
 			return {"ok": false, "error": "%s must give the highest %d cards." % [str(action.role), amount]}
 	else:
 		var owned := {}
-		for card: CardData in players[player_index].hand:
+		for card in players[player_index].hand:
 			owned[card.card_id()] = true
 		for id in normalized_ids:
 			if not owned.has(id):
@@ -151,15 +151,15 @@ func _apply_exchanges(players: Array[Dictionary]) -> void:
 		var slave_index := int(exchange.slave_player)
 		var upper_hand: Array = players[upper_index].hand
 		var slave_hand: Array = players[slave_index].hand
-		var outgoing_upper: Array[CardData] = []
-		var outgoing_slave: Array[CardData] = []
+		var outgoing_upper: Array = []
+		var outgoing_slave: Array = []
 		for id in exchange.upper_return_ids:
-			var card := _find_card(upper_hand, str(id))
+			var card: Variant = _find_card(upper_hand, str(id))
 			if card == null:
 				return
 			outgoing_upper.append(card)
 		for id in exchange.slave_card_ids:
-			var card := _find_card(slave_hand, str(id))
+			var card: Variant = _find_card(slave_hand, str(id))
 			if card == null:
 				return
 			outgoing_slave.append(card)
@@ -239,8 +239,8 @@ func transfers_for_player(player_index: int) -> Array[Dictionary]:
 			result.append(transfer.duplicate(true))
 	return result
 
-func _find_card(hand: Array, id: String) -> CardData:
-	for card: CardData in hand:
+func _find_card(hand: Array, id: String):
+	for card in hand:
 		if card.card_id() == id:
 			return card
 	return null
@@ -258,6 +258,6 @@ func _same_ids(a: Array, b: Array) -> bool:
 
 static func _card_ids(cards: Array) -> Array[String]:
 	var ids: Array[String] = []
-	for card: CardData in cards:
+	for card in cards:
 		ids.append(card.card_id())
 	return ids

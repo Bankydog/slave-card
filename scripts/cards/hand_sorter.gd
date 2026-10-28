@@ -5,7 +5,7 @@ const GameRulesScript = preload("res://scripts/game/game_rules.gd")
 
 static func sort_hand(hand: Array) -> void:
 	var rules = GameRulesScript.new()
-	hand.sort_custom(func(a: CardData, b: CardData) -> bool:
+	hand.sort_custom(func(a, b) -> bool:
 		var strength_comparison: int = rules.compare_card_strength(a, b)
 		if strength_comparison != 0:
 			return strength_comparison < 0

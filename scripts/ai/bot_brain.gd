@@ -1,7 +1,7 @@
 class_name BotBrain
 extends RefCounted
 
-func choose_play(hand: Array, current_cards: Array, rules: GameRules) -> Array:
+func choose_play(hand: Array, current_cards: Array, rules) -> Array:
 	var legal_plays: Array = rules.list_legal_combinations(hand, current_cards)
 	if legal_plays.is_empty():
 		return []
@@ -34,7 +34,7 @@ func choose_play(hand: Array, current_cards: Array, rules: GameRules) -> Array:
 	return best.duplicate()
 
 # Compatibility helper for callers that still present a single center card.
-func choose_card(hand: Array, current_card: CardData, is_lead: bool, rules: GameRules) -> CardData:
+func choose_card(hand: Array, current_card, is_lead: bool, rules):
 	var current_cards: Array = [] if is_lead or current_card == null else [current_card]
 	var play := choose_play(hand, current_cards, rules)
 	return play[0] if not play.is_empty() else null
@@ -42,9 +42,9 @@ func choose_card(hand: Array, current_card: CardData, is_lead: bool, rules: Game
 func _cards_before(a: Array, b: Array) -> bool:
 	var a_sorted: Array[String] = []
 	var b_sorted: Array[String] = []
-	for card: CardData in a:
+	for card in a:
 		a_sorted.append(card.card_id())
-	for card: CardData in b:
+	for card in b:
 		b_sorted.append(card.card_id())
 	a_sorted.sort()
 	b_sorted.sort()

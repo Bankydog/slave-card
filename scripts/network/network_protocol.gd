@@ -1,6 +1,8 @@
 class_name NetworkProtocol
 extends RefCounted
 
+const CardDataScript = preload("res://scripts/cards/card_data.gd")
+
 const CREATE_ROOM := "create_room"
 const JOIN_ROOM := "join_room"
 const PLAYER_JOINED := "player_joined"
@@ -28,6 +30,6 @@ static func message(message_type: String, payload: Dictionary = {}) -> Dictionar
 static func card_ids(cards: Array) -> Array[String]:
 	var result: Array[String] = []
 	for card in cards:
-		if card is CardData:
+		if card is CardDataScript:
 			result.append(card.card_id())
 	return result

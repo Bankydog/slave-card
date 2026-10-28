@@ -52,7 +52,7 @@ func tick(delta: float) -> void:
 		if room.bot_delay < 0.45:
 			continue
 		room.bot_delay = 0.0
-		var game: GameState = room.game_state
+		var game = room.game_state
 		var player_index: int = game.current_player
 		if player_index < 0 or player_index >= room.members.size():
 			continue
@@ -66,7 +66,7 @@ func tick(delta: float) -> void:
 			_apply_pass(room, player_index)
 		else:
 			var card_ids: Array[String] = []
-			for card: CardData in cards:
+			for card in cards:
 				card_ids.append(card.card_id())
 			_apply_play(room, player_index, card_ids)
 
@@ -187,7 +187,7 @@ func _start_next_round(peer_id: int) -> void:
 
 func _start_round(room: Dictionary) -> void:
 	var round_starter := -1
-	var previous_game: GameState = room.game_state
+	var previous_game = room.game_state
 	if previous_game != null and not previous_game.finishing_order.is_empty():
 		round_starter = previous_game.finishing_order[0]
 	room.round_number = int(room.round_number) + 1
@@ -293,7 +293,7 @@ func _apply_play(room: Dictionary, player_index: int, card_ids: Array) -> void:
 		_reject_player(room, player_index, "Select at least one card to play.")
 		return
 	var hand: Array = room.game_state.players[player_index].hand
-	var chosen: Array[CardData] = []
+	var chosen: Array = []
 	var seen_ids := {}
 	for value in card_ids:
 		var card_id := str(value)
@@ -301,8 +301,8 @@ func _apply_play(room: Dictionary, player_index: int, card_ids: Array) -> void:
 			_reject_player(room, player_index, "A card was submitted more than once.")
 			return
 		seen_ids[card_id] = true
-		var owned_card: CardData
-		for item: CardData in hand:
+		var owned_card
+		for item in hand:
 			if item.card_id() == card_id:
 				owned_card = item
 				break
@@ -325,7 +325,7 @@ func _apply_pass(room: Dictionary, player_index: int) -> void:
 	_after_action(room)
 
 func _after_action(room: Dictionary) -> void:
-	var game: GameState = room.game_state
+	var game = room.game_state
 	var finished_count: int = game.finishing_order.size()
 	if finished_count > int(room.last_finished_count):
 		var newly_finished: int = game.finishing_order[finished_count - 1]
@@ -401,7 +401,7 @@ func _broadcast_turn(room: Dictionary) -> void:
 	_broadcast(room, Protocol.TURN_CHANGED, _public_turn(room))
 
 func _public_turn(room: Dictionary) -> Dictionary:
-	var game: GameState = room.game_state
+	var game = room.game_state
 	var players: Array[Dictionary] = []
 	for i in range(room.members.size()):
 		var player: Dictionary = game.players[i]
@@ -511,6 +511,6 @@ func _guest_name(requested: String) -> String:
 
 static func _serialize_hand(hand: Array) -> Array[Dictionary]:
 	var serialized: Array[Dictionary] = []
-	for card: CardData in hand:
+	for card in hand:
 		serialized.append(card.to_dict())
 	return serialized

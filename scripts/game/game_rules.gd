@@ -1,6 +1,8 @@
 class_name GameRules
 extends RefCounted
 
+const CardDataScript = preload("res://scripts/cards/card_data.gd")
+
 const RANKS := ["3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "2"]
 const SUIT_ORDER := ["Clubs", "Diamonds", "Hearts", "Spades"]
 const STRAIGHT_MIN_LENGTH := 3
@@ -21,7 +23,7 @@ func classify(cards: Array) -> Dictionary:
 	var rank_counts := {}
 	var rank_values: Array[int] = []
 	for card in cards:
-		if not card is CardData:
+		if not card is CardDataScript:
 			return _invalid("The play contains an invalid card.")
 		var rank: int = card.strength()
 		if rank < 0:
@@ -65,10 +67,10 @@ func can_beat(cards: Array, current_cards: Array) -> bool:
 		return false
 	return compare_combinations(cards, current_cards) > 0
 
-func compare_card_strength(card_a: CardData, card_b: CardData) -> int:
+func compare_card_strength(card_a, card_b) -> int:
 	if card_a == null or card_b == null:
 		return 0
-	var rank_difference := card_a.strength() - card_b.strength()
+	var rank_difference: int = card_a.strength() - card_b.strength()
 	if rank_difference != 0:
 		return 1 if rank_difference > 0 else -1
 	return compare_suit_strength(card_a.suit, card_b.suit)
@@ -85,8 +87,8 @@ func compare_same_rank_suit_sequences(cards_a: Array, cards_b: Array) -> int:
 		return 0
 	var sorted_a: Array = cards_a.duplicate()
 	var sorted_b: Array = cards_b.duplicate()
-	sorted_a.sort_custom(func(a: CardData, b: CardData) -> bool: return compare_suit_strength(a.suit, b.suit) > 0)
-	sorted_b.sort_custom(func(a: CardData, b: CardData) -> bool: return compare_suit_strength(a.suit, b.suit) > 0)
+	sorted_a.sort_custom(func(a, b) -> bool: return compare_suit_strength(a.suit, b.suit) > 0)
+	sorted_b.sort_custom(func(a, b) -> bool: return compare_suit_strength(a.suit, b.suit) > 0)
 	for i in range(sorted_a.size()):
 		var suit_comparison := compare_suit_strength(sorted_a[i].suit, sorted_b[i].suit)
 		if suit_comparison != 0:
@@ -113,8 +115,8 @@ func compare_combinations(cards_a: Array, cards_b: Array) -> int:
 		return compare_same_rank_suit_sequences(cards_a, cards_b)
 	var sorted_a: Array = cards_a.duplicate()
 	var sorted_b: Array = cards_b.duplicate()
-	sorted_a.sort_custom(func(a: CardData, b: CardData) -> bool: return a.strength() > b.strength())
-	sorted_b.sort_custom(func(a: CardData, b: CardData) -> bool: return a.strength() > b.strength())
+	sorted_a.sort_custom(func(a, b) -> bool: return a.strength() > b.strength())
+	sorted_b.sort_custom(func(a, b) -> bool: return a.strength() > b.strength())
 	var has_higher_suit := false
 	for i in range(sorted_a.size()):
 		if sorted_a[i].strength() != sorted_b[i].strength():
@@ -129,7 +131,7 @@ func list_legal_combinations(hand: Array, current_cards: Array = []) -> Array:
 		return results
 	var cards_by_rank := {}
 	for card in hand:
-		if not card is CardData:
+		if not card is CardDataScript:
 			continue
 		var rank: int = card.strength()
 		if rank < 0:
@@ -179,7 +181,7 @@ func selectable_card_ids(hand: Array, current_cards: Array, selected_card_ids: A
 	for combination in list_legal_combinations(hand, current_cards):
 		var contains_selection := true
 		var combination_ids := {}
-		for card: CardData in combination:
+		for card in combination:
 			combination_ids[card.card_id()] = true
 		for selected_id in selected:
 			if not combination_ids.has(selected_id):
@@ -187,7 +189,7 @@ func selectable_card_ids(hand: Array, current_cards: Array, selected_card_ids: A
 				break
 		if not contains_selection:
 			continue
-		for card: CardData in combination:
+		for card in combination:
 			selectable[card.card_id()] = true
 	return selectable
 
