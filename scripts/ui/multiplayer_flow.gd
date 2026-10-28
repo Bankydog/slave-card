@@ -28,6 +28,8 @@ var is_host := false
 var local_player_index := -1
 var online_player_index := -1
 var online_round := 0
+var last_round_sound := -1
+var online_center_initialized := false
 var online_phase := "lobby"
 var rps_players: Array = []
 var rps_choices: Dictionary = {}
@@ -374,6 +376,8 @@ func _show_online_game() -> void:
 	if next_center_ids != online_center_card_ids:
 		if not next_center_ids.is_empty():
 			animation_player = int(online_snapshot.get("last_player", -1))
+			if online_center_initialized:
+				SfxManager.play_card_play()
 		online_center_card_ids = next_center_ids.duplicate()
 	var table_view: Control = TablePresentationScript.new()
 	table_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -637,12 +641,16 @@ func _on_server_message(message: Dictionary) -> void:
 			online_snapshot.clear()
 			online_center_card_ids.clear()
 			online_round = int(payload.get("round_number", online_round + 1))
+			_play_round_start_once(online_round)
+			online_center_initialized = false
 			online_phase = str(payload.get("phase", "playing"))
 			online_players = payload.get("players", online_players)
 			online_roles = payload.get("roles_by_player", online_roles)
 		Protocol.DEAL:
 			online_player_index = int(payload.get("player_index", online_player_index))
 			online_round = int(payload.get("round_number", online_round))
+			_play_round_start_once(online_round)
+			online_center_initialized = true
 			online_phase = str(payload.get("phase", online_phase))
 			rps_players = payload.get("rps_players", rps_players)
 			rps_choices = payload.get("rps_choices", rps_choices)
@@ -692,6 +700,12 @@ func _on_server_message(message: Dictionary) -> void:
 		_:
 			pass
 
+func _play_round_start_once(round_number: int) -> void:
+	if round_number <= 0 or round_number == last_round_sound:
+		return
+	last_round_sound = round_number
+	SfxManager.play_shuffle()
+
 func _submit_play() -> void:
 	if selected_card_ids.is_empty():
 		status_text = "Select a combination to play."
@@ -709,6 +723,7 @@ func _submit_exchange() -> void:
 func _toggle_card(card_id: String) -> void:
 	if online_phase == "card_exchange" and (exchange_role.begins_with("Slave ") or _trade_is_ready(exchange_role)):
 		return
+	SfxManager.play_card_select()
 	if selected_card_ids.has(card_id):
 		selected_card_ids.erase(card_id)
 	else:
@@ -720,6 +735,8 @@ func _leave_room() -> void:
 		endpoint.send_intent(Protocol.LEAVE_ROOM, {})
 		endpoint.disconnect_from_server()
 	room_code = ""
+	last_round_sound = -1
+	online_center_initialized = false
 	room_players.clear()
 	online_hand.clear()
 	pending_request.clear()
@@ -746,6 +763,9 @@ func _enforce_text_minimum(root: Node) -> void:
 	_enforce_node_text_minimum(root)
 
 func _enforce_node_text_minimum(node: Node) -> void:
+	if node is BaseButton and node.get_script() != CardViewScript and not (node is Button and node.text == "Play") and not node.has_meta("sfx_wired"):
+		node.pressed.connect(SfxManager.play_ui_click)
+		node.set_meta("sfx_wired", true)
 	if node is Label or node is Button or node is LineEdit:
 		var control := node as Control
 		control.add_theme_font_size_override("font_size", maxi(16, control.get_theme_font_size("font_size")))

@@ -13,7 +13,6 @@ var name_labels: Array[Label] = []
 var role_icons: Array[TextureRect] = []
 var detail_labels: Array[Label] = []
 var status_labels: Array[Label] = []
-var card_flip_player: AudioStreamPlayer
 var center_title: Label
 var center_pile: Control
 var center_layer: CenterContainer
@@ -37,10 +36,6 @@ func _ready() -> void:
 	play_flight_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	play_flight_layer.z_index = 100
 	add_child(play_flight_layer)
-	card_flip_player = AudioStreamPlayer.new()
-	card_flip_player.name = "CardFlipPlayer"
-	card_flip_player.stream = CARD_FLIP_SOUND
-	add_child(card_flip_player)
 
 func configure(players: Array, local_index: int, current_player: int, passed: Array, cards: Array, center_text: String, compact: bool, played_by: int = -1) -> void:
 	compact_view = compact
@@ -72,6 +67,7 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 	var next_ids: Array[String] = []
 	for card: CardData in cards:
 		next_ids.append(card.card_id())
+	var had_center_snapshot := has_center_snapshot
 	var cards_changed := not has_center_snapshot or next_ids != center_card_ids
 	if cards_changed:
 		play_animation_id += 1
@@ -89,8 +85,11 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 			center_pile = CardViewScript.make_pile(cards, compact_view, layout_scale)
 			center_group.add_child(center_pile)
 			center_pile.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			if played_by >= 0 and played_by < players.size() and seats_can_animate():
-				_start_card_flight(cards, played_by)
+			if played_by >= 0 and played_by < players.size():
+				if had_center_snapshot:
+					SfxManager.play_card_play()
+				if seats_can_animate():
+					_start_card_flight(cards, played_by)
 		center_title.add_theme_font_size_override("font_size", maxi(16, roundi(16.0 * layout_scale)))
 	call_deferred("_layout_seats")
 
@@ -111,11 +110,9 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 	var card_width := (42.0 if compact_view else 58.0) * layout_scale
 	var card_height := (64.0 if compact_view else 92.0) * layout_scale
 	var pile_cards: Control = center_pile.get_child(0)
-	var sound_duration := CARD_FLIP_SOUND.get_length()
 	var stagger := 0.035
+	var sound_duration := CARD_FLIP_SOUND.get_length()
 	var flight_duration := maxf(0.1, sound_duration - stagger * float(cards.size() - 1))
-	card_flip_player.stop()
-	card_flip_player.play()
 	play_animation_tween = create_tween()
 	play_animation_tween.set_parallel(true)
 	for i in range(cards.size()):

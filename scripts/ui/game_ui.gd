@@ -126,6 +126,7 @@ func _start_game() -> void:
 	_start_local_round()
 
 func _start_local_round() -> void:
+	SfxManager.play_shuffle()
 	_clear()
 	local_round_number += 1
 	state = GameStateScript.new()
@@ -192,6 +193,7 @@ func _show_local_rps() -> void:
 		pick.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
 		pick.custom_minimum_size = Vector2(150.0, 210.0) * _display_scale()
 		pick.pressed.connect(_choose_local_rps.bind(choice))
+		pick.pressed.connect(SfxManager.play_ui_click)
 		column.add_child(pick)
 		var caption := Label.new()
 		caption.text = choice_names[choice]
@@ -362,6 +364,7 @@ func _refresh_local_exchange() -> void:
 func _toggle_local_exchange_card(card: CardData) -> void:
 	if local_exchange.is_slave_participant(0):
 		return
+	SfxManager.play_card_select()
 	var id := card.card_id()
 	if selected_exchange_ids.has(id):
 		selected_exchange_ids.erase(id)
@@ -396,6 +399,7 @@ func _finish_local_round() -> void:
 	_show_results()
 
 func _toggle_play_card(card_id: String) -> void:
+	SfxManager.play_card_select()
 	if selected_card_ids.has(card_id):
 		selected_card_ids.erase(card_id)
 	else:
@@ -506,6 +510,9 @@ func _enforce_text_minimum(root: Node) -> void:
 	_enforce_node_text_minimum(root)
 
 func _enforce_node_text_minimum(node: Node) -> void:
+	if node is BaseButton and node.get_script() != CARD_VIEW and not (node is Button and node.text == "Play") and not node.has_meta("sfx_wired"):
+		node.pressed.connect(SfxManager.play_ui_click)
+		node.set_meta("sfx_wired", true)
 	if node is Label or node is Button or node is LineEdit:
 		var control := node as Control
 		control.add_theme_font_size_override("font_size", maxi(16, control.get_theme_font_size("font_size")))
