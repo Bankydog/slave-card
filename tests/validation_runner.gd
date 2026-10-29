@@ -651,7 +651,7 @@ func _test_table_presentation() -> void:
 	_check(red_card.top_rank.text == "Q" and red_card.center_suit.texture != null and red_card.get_node("FaceMarks").get_child_count() == 2, "card face shows one top-left rank and one centered suit texture")
 	_check(red_card.top_rank.get_theme_font_size("font_size") >= 16, "card rank text never falls below 16 px")
 	red_card.set_available(false)
-	_check(red_card.top_rank.visible and red_card.center_suit.visible and red_card.top_rank.text == "Q" and red_card.center_suit.texture != null, "disabled card face retains readable rank and center suit texture")
+	_check(red_card.top_rank.visible and red_card.center_suit.visible and red_card.top_rank.text == "Q" and red_card.center_suit.texture != null and red_card.top_rank.get_theme_color("font_color") == Color("#111111"), "disabled card face retains readable black rank and center suit texture")
 	var flow = MultiplayerFlowScript.new()
 	flow.guest_name = "Ari"
 	_check(flow.get_display_name() == "Ari", "entered display name is available to single-player and room flows")
@@ -662,18 +662,19 @@ func _test_table_presentation() -> void:
 	add_child(table)
 	table.configure([{"name":"Ari", "card_count":5, "role":"King"}], 0, 0, [], [], "Lead a combination", false)
 	_check("Ari" in table.name_labels[0].text and table.name_labels[0].get_theme_font_size("font_size") >= 16 and table.detail_labels[0].get_theme_font_size("font_size") >= 16 and table.status_labels[0].get_theme_font_size("font_size") >= 16, "table shows the player's name with readable text at or above 16 px")
+	_check(table.role_icons[0].get_parent() == table.detail_labels[0].get_parent(), "role badge aligns with the card-count row")
 	table.queue_free()
 	var suit_checks := [
-		{"suit":"Hearts", "symbol":"♥", "color":Color("#b51f36")},
-		{"suit":"Diamonds", "symbol":"♦", "color":Color("#b51f36")},
-		{"suit":"Spades", "symbol":"♠", "color":Color("#17212b")},
-		{"suit":"Clubs", "symbol":"♣", "color":Color("#17212b")}
+		{"suit":"Hearts", "symbol":"♥", "color":Color("#111111")},
+		{"suit":"Diamonds", "symbol":"♦", "color":Color("#111111")},
+		{"suit":"Spades", "symbol":"♠", "color":Color("#111111")},
+		{"suit":"Clubs", "symbol":"♣", "color":Color("#111111")}
 	]
 	for item in suit_checks:
 		var suit_view: CardView = CardViewScript.new()
 		suit_view.setup(_card("A", item.suit), false, true)
 		var expected_texture_path := "res://assets/suits/%s.png" % str(item.suit).to_lower()
-		_check(suit_view.center_suit.texture != null and suit_view.center_suit.texture.resource_path == expected_texture_path and suit_view.top_rank.get_theme_color("font_color") == item.color, "%s suit renders with the expected texture and color" % item.suit)
+		_check(suit_view.center_suit.texture != null and suit_view.center_suit.texture.resource_path == expected_texture_path and suit_view.top_rank.get_theme_color("font_color") == item.color, "%s suit icon renders and card rank uses black ink" % item.suit)
 		suit_view.free()
 	var combinations: Array = [
 		{"name":"Single", "cards":[_card("3")]},

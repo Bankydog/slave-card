@@ -70,7 +70,7 @@ func _suit_texture() -> Texture2D:
 	return SUIT_TEXTURES.get(card.suit) as Texture2D
 
 func _suit_ink() -> Color:
-	return Color("#b51f36") if card.suit in ["Hearts", "Diamonds"] else Color("#17212b")
+	return Color("#111111")
 
 func _apply_styles() -> void:
 	var normal := StyleBoxFlat.new()
@@ -86,13 +86,12 @@ func _apply_styles() -> void:
 	add_theme_stylebox_override("pressed", pressed_style)
 	add_theme_stylebox_override("disabled", disabled_style)
 	var ink := _suit_ink()
-	var dim_ink := Color("#985d66") if card.suit in ["Hearts", "Diamonds"] else Color("#626d68")
+	var dim_ink := Color("#626d68")
 	add_theme_color_override("font_color", ink)
 	add_theme_color_override("font_hover_color", ink)
 	add_theme_color_override("font_disabled_color", dim_ink)
 	if is_instance_valid(top_rank):
-		var mark_ink := ink if playable else dim_ink
-		top_rank.add_theme_color_override("font_color", mark_ink)
+		top_rank.add_theme_color_override("font_color", ink)
 		center_suit.modulate = Color.WHITE if playable else dim_ink
 	modulate = Color.WHITE
 

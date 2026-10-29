@@ -53,7 +53,7 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 		name_labels[i].text = "%d · %s" % [i + 1, player_name]
 		var details := "%d cards" % card_count
 		role_icons[i].texture = role_texture(role)
-		role_icons[i].visible = role_icons[i].texture != null; role_icons[i].custom_minimum_size = (Vector2(38, 32) if compact_view else Vector2(48, 40)) * layout_scale
+		role_icons[i].visible = role_icons[i].texture != null; role_icons[i].custom_minimum_size = (Vector2(24, 20) if compact_view else Vector2(28, 24)) * layout_scale
 		detail_labels[i].text = details
 		var status := "WAITING"
 		if bool(player.get("finished", false)):
@@ -193,13 +193,25 @@ func _ensure_seats(count: int) -> void:
 		player_name.add_theme_font_size_override("font_size", 16)
 		player_name.add_theme_color_override("font_color", Color("#fff8e8"))
 		player_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		name_row.add_child(player_name); var role_icon := TextureRect.new(); role_icon.name = "RoleIcon"; role_icon.custom_minimum_size = Vector2(28, 24); role_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE; role_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED; role_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE; role_icon.hide(); name_row.add_child(role_icon)
+		name_row.add_child(player_name)
+		var details_row := HBoxContainer.new()
+		details_row.add_theme_constant_override("separation", 4)
+		content.add_child(details_row)
 		var details := Label.new()
 		details.clip_text = true
+		details.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		details.add_theme_font_size_override("font_size", 16)
 		details.add_theme_color_override("font_color", Color("#cbd9cb"))
 		details.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		content.add_child(details)
+		details_row.add_child(details)
+		var role_icon := TextureRect.new()
+		role_icon.name = "RoleIcon"
+		role_icon.custom_minimum_size = Vector2(28, 24)
+		role_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		role_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		role_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		role_icon.hide()
+		details_row.add_child(role_icon)
 		var status := Label.new()
 		status.clip_text = true
 		status.add_theme_font_size_override("font_size", 16)
