@@ -112,7 +112,7 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 			center_pile.queue_free()
 			center_pile = null
 		if not cards.is_empty():
-			center_pile = CardViewScript.make_pile(cards, compact_view, layout_scale * 2.0)
+			center_pile = CardViewScript.make_pile(cards, compact_view, layout_scale * 1.6)
 			center_group.add_child(center_pile)
 			center_pile.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			if played_by >= 0 and played_by < players.size():
@@ -139,7 +139,7 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 		return
 	var source_global := seat_widgets[played_by].get_global_rect().get_center()
 	var source := play_flight_layer.get_global_transform().affine_inverse() * source_global
-	var flight_scale := layout_scale * 2.0
+	var flight_scale := layout_scale * 1.6
 	var card_width := (42.0 if compact_view else 58.0) * flight_scale
 	var card_height := (64.0 if compact_view else 92.0) * flight_scale
 	var pile_cards: Control = center_pile.get_child(0)
@@ -352,8 +352,8 @@ static func normalized_seat_positions(player_count: int, compact: bool = false, 
 	var local := posmod(local_index, count)
 	# Match the new background's tabletop ellipse within the 800x800 logical table area.
 	# The local player remains south while the other seats follow the table rim.
-	var radius_x := 0.45
-	var radius_y := 0.40
+	var radius_x := 0.52
+	var radius_y := 0.43
 	var center_y := 0.475
 	for player_index in range(count):
 		var visual_offset := posmod(player_index - local, count)
