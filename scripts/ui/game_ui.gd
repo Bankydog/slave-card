@@ -366,7 +366,27 @@ func _choose_local_rps(human_choice: int) -> void:
 	start_round.custom_minimum_size = Vector2(190.0, 48.0) * _display_scale()
 	start_round.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	start_round.pressed.connect(_finish_local_rps.bind(local_rps_pending_winner))
+	_style_rps_result_button(start_round)
 	result_root.add_child(start_round)
+
+func _style_rps_result_button(button: Button) -> void:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color.WHITE
+	normal.border_color = Color("#d7c99a")
+	normal.set_border_width_all(1)
+	normal.set_corner_radius_all(6)
+	button.add_theme_stylebox_override("normal", normal)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color("#f1eee4")
+	button.add_theme_stylebox_override("hover", hover)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color("#ddd8c8")
+	button.add_theme_stylebox_override("pressed", pressed)
+	button.add_theme_stylebox_override("focus", normal.duplicate())
+	button.add_theme_color_override("font_color", Color.BLACK)
+	button.add_theme_color_override("font_hover_color", Color.BLACK)
+	button.add_theme_color_override("font_pressed_color", Color.BLACK)
+	button.add_theme_color_override("font_disabled_color", Color("#777777"))
 
 func _animate_local_rps_reveal(human_choice: int, bot_choice: int) -> VBoxContainer:
 	_clear_preserving_timer()

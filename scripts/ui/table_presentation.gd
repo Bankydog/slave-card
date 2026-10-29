@@ -91,6 +91,9 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 		status_labels[i].text = status
 		_style_seat(seat_widgets[i], i == current_player and not bool(player.get("finished", false)), i == local_index)
 	center_title.text = center_text
+	var show_played_cards := not cards.is_empty()
+	center_title.visible = not show_played_cards
+	center_info.visible = not show_played_cards
 	var next_ids: Array[String] = []
 	for card: CardData in cards:
 		next_ids.append(card.card_id())
@@ -109,7 +112,7 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 			center_pile.queue_free()
 			center_pile = null
 		if not cards.is_empty():
-			center_pile = CardViewScript.make_pile(cards, compact_view, layout_scale * 1.45)
+			center_pile = CardViewScript.make_pile(cards, compact_view, layout_scale * 2.0)
 			center_group.add_child(center_pile)
 			center_pile.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			if played_by >= 0 and played_by < players.size():
@@ -136,7 +139,7 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 		return
 	var source_global := seat_widgets[played_by].get_global_rect().get_center()
 	var source := play_flight_layer.get_global_transform().affine_inverse() * source_global
-	var flight_scale := layout_scale * 1.45
+	var flight_scale := layout_scale * 2.0
 	var card_width := (42.0 if compact_view else 58.0) * flight_scale
 	var card_height := (64.0 if compact_view else 92.0) * flight_scale
 	var pile_cards: Control = center_pile.get_child(0)
