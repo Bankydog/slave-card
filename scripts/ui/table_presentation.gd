@@ -352,8 +352,8 @@ static func normalized_seat_positions(player_count: int, compact: bool = false, 
 	var local := posmod(local_index, count)
 	# Match the new background's tabletop ellipse within the 800x800 logical table area.
 	# The local player remains south while the other seats follow the table rim.
-	var radius_x := 0.52
-	var radius_y := 0.43
+	var radius_x := 0.60
+	var radius_y := 0.47
 	var center_y := 0.475
 	for player_index in range(count):
 		var visual_offset := posmod(player_index - local, count)
