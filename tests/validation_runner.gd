@@ -11,6 +11,7 @@ const GameRulesScript = preload("res://scripts/game/game_rules.gd")
 const HandSorterScript = preload("res://scripts/cards/hand_sorter.gd")
 const CardViewScript = preload("res://scripts/ui/card_view.gd")
 const TablePresentationScript = preload("res://scripts/ui/table_presentation.gd")
+const TableLayoutScript = preload("res://scripts/ui/table_layout.gd")
 const MultiplayerFlowScript = preload("res://scripts/ui/multiplayer_flow.gd")
 
 var failures: Array[String] = []
@@ -712,12 +713,34 @@ func _test_card_hover_visuals() -> void:
 	hand_row.free()
 
 func _test_table_presentation() -> void:
-	for count in [2, 6, 7, 12]:
-		var positions: Array[Vector2] = TablePresentationScript.normalized_seat_positions(count)
-		var valid: bool = positions.size() == count and positions[0].x == 0.5 and positions[0].y > 0.7
-		for position in positions:
-			valid = valid and position.x >= 0.0 and position.x <= 1.0 and position.y >= 0.0 and position.y <= 1.0
-		_check(valid, "%d-player table has visible in-bounds seats with local player at bottom" % count)
+	for count in range(2, 13):
+		for local_index in range(count):
+			var positions: Array[Vector2] = TablePresentationScript.normalized_seat_positions(count, false, local_index)
+			var south := positions[local_index]
+			var local_is_south := is_equal_approx(south.x, 0.5) and is_equal_approx(south.y, 0.9)
+			var unique_positions := {}
+			for position in positions:
+				unique_positions["%.4f,%.4f" % [position.x, position.y]] = true
+			var all_unique := unique_positions.size() == count
+			var next_index := (local_index + 1) % count
+			var next_position := positions[next_index]
+			var next_moves_left := count == 2 or next_position.x < 0.5
+			_check(local_is_south and all_unique and next_moves_left, "%d-player visual seats keep local South and deterministic next-player-left mapping (local %d)" % [count, local_index])
+		var panel_size := TablePresentationScript.seat_panel_size(count)
+		_check(panel_size.x >= 118.0 and panel_size.y >= 68.0, "%d-player seat panel remains readable" % count)
+	for viewport_size in [Vector2(1920, 1080), Vector2(1600, 900), Vector2(1366, 768), Vector2(1280, 720), Vector2(800, 450), Vector2(2560, 1440), Vector2(3840, 2160)]:
+		var layout: Dictionary = TableLayoutScript.layout_for_viewport(viewport_size)
+		var table_rect: Rect2 = layout.table_zone
+		_check(table_rect.size.x == table_rect.size.y and table_rect.position.x >= layout.canvas_origin.x, "square table fits centered at viewport %s" % viewport_size)
+	_check(TablePresentationScript.TABLE_TEXTURE.get_width() > TablePresentationScript.TABLE_TEXTURE.get_height(), "new table art is aspect-fitted as a landscape source inside the square zone")
+	var two_seats := TablePresentationScript.normalized_seat_positions(2)
+	_check(two_seats[0].is_equal_approx(Vector2(0.5, 0.9)) and two_seats[1].is_equal_approx(Vector2(0.5, 0.1)), "two-player seating places the opponent North of local South")
+	var three_seats := TablePresentationScript.normalized_seat_positions(3)
+	_check(three_seats[1].x < 0.5 and three_seats[2].x > 0.5 and is_equal_approx(three_seats[1].y, three_seats[2].y), "three-player opponents occupy symmetric upper-left and upper-right seats")
+	var four_seats := TablePresentationScript.normalized_seat_positions(4)
+	_check(four_seats[1].x < 0.5 and is_equal_approx(four_seats[1].y, 0.5) and is_equal_approx(four_seats[2].x, 0.5) and four_seats[2].y < 0.5 and four_seats[3].x > 0.5, "four-player turn order proceeds South, West, North, East")
+	var eight_seats := TablePresentationScript.normalized_seat_positions(8)
+	_check(eight_seats.size() == 8 and eight_seats[1].x < 0.5 and eight_seats[1].y > 0.5 and eight_seats[7].x > 0.5 and eight_seats[7].y > 0.5, "eight-player seating fills the compass ring with next player to local left")
 	var red_card: CardView = CardViewScript.new()
 	red_card.setup(_card("Q", "Hearts"), false, true)
 	_check(red_card.top_rank.text == "Q" and red_card.center_suit.texture != null and red_card.get_node("FaceMarks").get_child_count() == 2, "card face shows one top-left rank and one centered suit texture")
@@ -737,7 +760,7 @@ func _test_table_presentation() -> void:
 	_check(table.role_icons[0].get_parent() == table.detail_labels[0].get_parent(), "role badge aligns with the card-count row")
 	table.configure([{"name":"Bank", "card_count":5, "disconnected":true, "forfeited":true}], 0, 0, [], [], "Lead a combination", false)
 	_check(table.status_labels[0].text == "LEFT", "disconnected seat shows LEFT instead of WAITING or TURN")
-	table.queue_free()
+	table.free()
 	var action_assets_loaded := true
 	for asset_path in ["res://assets/gadget/bottom-play.png", "res://assets/gadget/bottom-pass.png", "res://assets/gadget/bottom-leave.png"]:
 		action_assets_loaded = action_assets_loaded and load(asset_path) is Texture2D

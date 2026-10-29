@@ -9,16 +9,15 @@ const CardExchangeScript = preload("res://scripts/game/card_exchange.gd")
 const MatchStateScript = preload("res://scripts/game/match_state.gd")
 const HandSorterScript = preload("res://scripts/cards/hand_sorter.gd")
 const TablePresentationScript = preload("res://scripts/ui/table_presentation.gd")
+const TableLayoutScript = preload("res://scripts/ui/table_layout.gd")
 const TITLE_TEXTURE = preload("res://assets/idle/title.png")
-const TABLE_FOUR_TEXTURE = preload("res://assets/background/table-4.png")
-const TABLE_MANY_TEXTURE = preload("res://assets/background/table-12.png")
+const TABLE_TEXTURE = preload("res://assets/background/table1-8.png")
 
 var state
 var bot := BotBrainScript.new()
 var selected_card_ids: Array[String] = []
 var bot_timer: Timer
 var title_label: Label
-var info_label: Label
 var table_presentation: Control
 var hand_box: HBoxContainer
 var center_box: VBoxContainer
@@ -395,72 +394,54 @@ func _finish_local_rps(winner: int) -> void:
 
 func _build_table() -> void:
 	set_game_background(player_count)
-	var root := VBoxContainer.new()
+	table_background.visible = false
+	var root := Control.new()
+	root.name = "GameplayLayout"
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("separation", roundi((4.0 if _is_compact_view() else 10.0) * _display_scale()))
 	add_child(root)
+	table_presentation = TablePresentationScript.new()
+	table_presentation.name = "TablePresentation"
+	table_presentation.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_child(table_presentation)
 	var status_panel := PanelContainer.new()
 	status_panel.name = "RoundStatusPanel"
 	status_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	status_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	var hud_scale := _display_scale()
-	status_panel.position = Vector2(16.0, 10.0) * hud_scale
-	status_panel.custom_minimum_size.y = 40.0 * hud_scale
-	status_panel.size = Vector2.ZERO
+	root.add_child(status_panel)
 	var status_style := StyleBoxFlat.new()
 	status_style.bg_color = Color(0.05, 0.12, 0.10, 0.90)
 	status_style.border_color = Color("#c9a958")
 	status_style.set_border_width_all(1)
 	status_style.set_corner_radius_all(6)
-	status_style.content_margin_left = 8.0 * hud_scale
-	status_style.content_margin_right = 8.0 * hud_scale
-	status_style.content_margin_top = 3.0 * hud_scale
-	status_style.content_margin_bottom = 3.0 * hud_scale
 	status_panel.add_theme_stylebox_override("panel", status_style)
-	add_child(status_panel)
 	title_label = Label.new()
 	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title_label.clip_text = true
 	title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	title_label.add_theme_font_size_override("font_size", maxi(16, roundi(18.0 * hud_scale)))
 	status_panel.add_child(title_label)
-	_layout_round_status_panel()
-	table_presentation = TablePresentationScript.new()
-	table_presentation.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	table_presentation.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	table_presentation.custom_minimum_size.y = 120.0 * _display_scale()
-	root.add_child(table_presentation)
-	info_label = Label.new()
-	info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	root.add_child(info_label)
+	var bottom_hud := Control.new()
+	bottom_hud.name = "BottomHUD"
+	bottom_hud.mouse_filter = Control.MOUSE_FILTER_PASS
+	root.add_child(bottom_hud)
 	var scroll := ScrollContainer.new()
+	scroll.name = "LocalHandScroll"
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	scroll.custom_minimum_size.y = minf(360.0 * _display_scale(), maxf(78.0, size.y * (0.22 if _is_compact_view() else 0.25)))
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	root.add_child(scroll)
+	bottom_hud.add_child(scroll)
 	var hand_center := CenterContainer.new()
 	hand_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hand_center.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.add_child(hand_center)
 	hand_box = HBoxContainer.new()
+	hand_box.name = "LocalHand"
 	hand_box.alignment = BoxContainer.ALIGNMENT_CENTER
-	hand_box.add_theme_constant_override("separation", roundi((-21.0 if _is_compact_view() else -29.0) * _display_scale()))
 	hand_center.add_child(hand_box)
-	var action_margin := MarginContainer.new()
-	action_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	action_margin.add_theme_constant_override("margin_right", roundi(18.0 * _display_scale()))
-	action_margin.add_theme_constant_override("margin_bottom", roundi(10.0 * _display_scale()))
-	root.add_child(action_margin)
-	var action_row := HBoxContainer.new()
-	action_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	action_margin.add_child(action_row)
-	var action_spacer := Control.new()
-	action_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	action_row.add_child(action_spacer)
-	buttons_box = HBoxContainer.new()
-	buttons_box.alignment = BoxContainer.ALIGNMENT_END
-	buttons_box.add_theme_constant_override("separation", roundi((5.0 if _is_compact_view() else 10.0) * _display_scale()))
-	action_row.add_child(buttons_box)
+	var buttons_row := HBoxContainer.new()
+	buttons_row.name = "LocalActions"
+	buttons_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	buttons_row.add_theme_constant_override("separation", 8)
+	bottom_hud.add_child(buttons_row)
+	buttons_box = buttons_row
+	var button_size := Vector2(74, 74)
 	var play := TextureButton.new()
 	play.name = "PlayButton"
 	play.texture_normal = load("res://assets/gadget/bottom-play.png")
@@ -468,7 +449,7 @@ func _build_table() -> void:
 	play.texture_pressed = play.texture_normal
 	play.ignore_texture_size = true
 	play.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
-	play.custom_minimum_size = Vector2(62 if _is_compact_view() else 74, 62 if _is_compact_view() else 74) * _display_scale()
+	play.custom_minimum_size = button_size
 	play.tooltip_text = "Play"
 	play.pressed.connect(_play_selected)
 	buttons_box.add_child(play)
@@ -479,45 +460,66 @@ func _build_table() -> void:
 	pass_button.texture_pressed = pass_button.texture_normal
 	pass_button.ignore_texture_size = true
 	pass_button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
-	pass_button.custom_minimum_size = Vector2(62 if _is_compact_view() else 74, 62 if _is_compact_view() else 74) * _display_scale()
+	pass_button.custom_minimum_size = button_size
 	pass_button.tooltip_text = "Pass"
 	pass_button.pressed.connect(_pass)
 	buttons_box.add_child(pass_button)
 	var exchange_button := Button.new()
 	exchange_button.name = "ExchangeButton"
 	exchange_button.text = "Return selected"
-	exchange_button.custom_minimum_size = Vector2(154 if _is_compact_view() else 190, 48 if _is_compact_view() else 56) * _display_scale()
+	exchange_button.custom_minimum_size = Vector2(154, 48)
 	exchange_button.pressed.connect(_submit_local_exchange)
 	exchange_button.hide()
 	buttons_box.add_child(exchange_button)
-	var menu := TextureButton.new()
-	menu.name = "LeaveButton"
-	menu.texture_normal = load("res://assets/gadget/bottom-leave.png")
-	menu.texture_hover = menu.texture_normal
-	menu.texture_pressed = menu.texture_normal
-	menu.ignore_texture_size = true
-	menu.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
-	menu.custom_minimum_size = Vector2(62 if _is_compact_view() else 74, 62 if _is_compact_view() else 74) * _display_scale()
-	menu.tooltip_text = "Leave"
-	menu.pressed.connect(_return_to_main_menu)
-	buttons_box.add_child(menu)
+	var leave := TextureButton.new()
+	leave.name = "LeaveButton"
+	leave.texture_normal = load("res://assets/gadget/bottom-leave.png")
+	leave.texture_hover = leave.texture_normal
+	leave.texture_pressed = leave.texture_normal
+	leave.ignore_texture_size = true
+	leave.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+	leave.custom_minimum_size = button_size
+	leave.tooltip_text = "Leave"
+	leave.pressed.connect(_return_to_main_menu)
+	buttons_box.add_child(leave)
+	resized.connect(_layout_game_hud)
+	_layout_game_hud()
 
-func _layout_round_status_panel() -> void:
-	if not is_instance_valid(title_label):
+func _layout_game_hud() -> void:
+	if not is_instance_valid(title_label) or not is_instance_valid(buttons_box):
 		return
+	var viewport_size := get_viewport_rect().size
+	var layout: Dictionary = TableLayoutScript.layout_for_viewport(viewport_size)
+	var scale := float(layout.scale)
+	var top_hud: Rect2 = layout.top_hud
+	var bottom_hud: Rect2 = layout.bottom_hud
 	var panel := title_label.get_parent() as Control
-	if not is_instance_valid(panel):
-		return
-	var hud_scale := _display_scale()
-	panel.position = Vector2(16.0, 10.0) * hud_scale
-	var font_size := float(title_label.get_theme_font_size("font_size"))
-	var content_width := float(title_label.text.length()) * font_size * 0.56
-	panel.size = Vector2(minf(content_width + 22.0 * hud_scale, get_viewport_rect().size.x - 32.0 * hud_scale), 40.0 * hud_scale)
+	var panel_height := maxf(32.0, 42.0 * scale)
+	panel.position = top_hud.position + Vector2(16.0, maxf(0.0, (top_hud.size.y - panel_height) * 0.5))
+	panel.size = Vector2.ZERO
+	var font_size := float(maxi(16, roundi(18.0 * scale)))
+	title_label.add_theme_font_size_override("font_size", int(font_size))
+	var width := float(title_label.text.length()) * font_size * 0.56 + 24.0 * scale
+	panel.size = Vector2(minf(width, top_hud.size.x - 24.0 * scale), panel_height)
+	var bottom_hud_control := buttons_box.get_parent() as Control
+	bottom_hud_control.position = bottom_hud.position
+	bottom_hud_control.size = bottom_hud.size
+	var scroll := bottom_hud_control.get_node("LocalHandScroll") as ScrollContainer
+	var hand_height := minf((77.0 if _is_compact_view() else 109.0) * scale, bottom_hud.size.y - 74.0 * scale)
+	scroll.position = Vector2(24.0 * scale, 2.0 * scale)
+	scroll.size = Vector2(maxf(1.0, bottom_hud.size.x - 48.0 * scale), hand_height)
+	hand_box.add_theme_constant_override("separation", roundi(-29.0 * scale))
+	buttons_box.position = Vector2(0.0, hand_height)
+	buttons_box.size = Vector2(bottom_hud.size.x, maxf(0.0, bottom_hud.size.y - hand_height))
+	buttons_box.add_theme_constant_override("separation", roundi(8.0 * scale))
+	for button in buttons_box.get_children():
+		if button is BaseButton:
+			button.custom_minimum_size = Vector2(74.0, 74.0) * scale
 
 func _refresh() -> void:
 	if state == null or not is_instance_valid(hand_box):
 		return
-	_layout_round_status_panel()
+	_layout_game_hud()
 	if local_phase == "results":
 		return
 	if state.finishing_order.size() == state.players.size():
@@ -531,11 +533,12 @@ func _refresh() -> void:
 	buttons_box.get_node("ExchangeButton").hide()
 	var current = state.players[state.current_player]
 	title_label.text = "Round %d / %d  ·  %s" % [match_progress.current_round, match_progress.match_round_limit, "YOUR TURN" if current.is_human else "%s is thinking…" % current.name]
-	_layout_round_status_panel()
+	_layout_game_hud()
 	var center_text := "Lead a combination"
 	if not state.current_cards.is_empty():
 		center_text = "%s · %s" % [str(state.current_combination.get("type", "Play")), str(state.players[state.last_player].name)]
 	table_presentation.configure(state.players, 0, state.current_player, state.passed, state.current_cards, center_text, _is_compact_view(), state.last_player)
+	table_presentation.set_center_info("Cards: %d · Turn %d of %d" % [state.players[0].hand.size(), state.current_player + 1, state.players.size()])
 	for child in hand_box.get_children():
 		child.queue_free()
 	var human_hand: Array = state.players[0].hand
@@ -548,7 +551,9 @@ func _refresh() -> void:
 		view.set_available(not view.disabled)
 		view.pressed.connect(_toggle_play_card.bind(card_id))
 		CARD_VIEW.add_hand_slot(hand_box, view, _is_compact_view(), _display_scale())
-	info_label.text = "Cards: %d   •   Turn %d of %d" % [state.players[0].hand.size(), state.current_player + 1, state.players.size()]
+	var hand_scroll := hand_box.get_parent().get_parent() as ScrollContainer
+	hand_box.add_theme_constant_override("separation", roundi(CARD_VIEW.hand_separation(human_hand.size(), hand_scroll.size.x, _is_compact_view(), _display_scale())))
+
 	_enforce_text_minimum(self)
 	if current.is_human:
 		bot_timer.stop()
@@ -567,6 +572,7 @@ func _refresh_local_exchange() -> void:
 	if is_slave:
 		notice_text = "%s must give the %d highest cards. They are selected automatically." % [role, amount]
 	table_presentation.configure(state.players, 0, state.current_player, state.passed, [], notice_text, _is_compact_view())
+	table_presentation.set_center_info("Select exactly %d cards to return." % amount if not is_slave else "Mandatory cards are highlighted.")
 	for child in hand_box.get_children():
 		child.queue_free()
 	for card in state.players[0].hand:
@@ -577,7 +583,7 @@ func _refresh_local_exchange() -> void:
 		if not is_slave:
 			view.pressed.connect(_toggle_local_exchange_card.bind(card))
 		CARD_VIEW.add_hand_slot(hand_box, view, _is_compact_view(), _display_scale())
-	info_label.text = "Select exactly %d cards to return." % amount if not is_slave else "Mandatory cards are highlighted. You cannot replace them."
+
 	bot_timer.stop()
 	buttons_box.get_node("PlayButton").hide()
 	buttons_box.get_node("PassButton").hide()
@@ -601,11 +607,11 @@ func _toggle_local_exchange_card(card: CardData) -> void:
 func _submit_local_exchange() -> void:
 	var amount: int = local_exchange.pending_amount_for(0)
 	if selected_exchange_ids.size() != amount:
-		info_label.text = "Select exactly %d cards." % amount
+		table_presentation.set_center_info("Select exactly %d cards." % amount)
 		return
 	var result: Dictionary = local_exchange.select_return_cards(0, selected_exchange_ids, state.players)
 	if not result.ok:
-		info_label.text = str(result.error)
+		table_presentation.set_center_info(str(result.error))
 		return
 	selected_exchange_ids.clear()
 	if local_exchange.is_complete():
@@ -774,11 +780,11 @@ func _show_final_match_result() -> void:
 	root.add_child(menu)
 	_enforce_text_minimum(root)
 
-func set_game_background(players: int) -> void:
+func set_game_background(_players: int) -> void:
 	if not is_instance_valid(table_background):
 		return
-	table_background.texture = TABLE_FOUR_TEXTURE if players >= 2 and players <= 4 else TABLE_MANY_TEXTURE
-	table_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	table_background.texture = TABLE_TEXTURE
+	table_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	table_background.visible = true
 
 func set_title_screen_enabled(enabled: bool) -> void:
@@ -792,7 +798,7 @@ func set_title_screen_enabled(enabled: bool) -> void:
 	table_background.visible = enabled
 
 func _display_scale() -> float:
-	return CARD_VIEW.display_scale(get_viewport_rect().size)
+	return float(TableLayoutScript.layout_for_viewport(get_viewport_rect().size).scale)
 
 func _is_compact_view() -> bool:
 	return DisplayServer.window_get_size().y < 500

@@ -8,6 +8,7 @@ const GameRulesScript = preload("res://scripts/game/game_rules.gd")
 const MatchStateScript = preload("res://scripts/game/match_state.gd")
 const CardViewScript = preload("res://scripts/ui/card_view.gd")
 const TablePresentationScript = preload("res://scripts/ui/table_presentation.gd")
+const TableLayoutScript = preload("res://scripts/ui/table_layout.gd")
 
 signal single_player_requested
 
@@ -92,7 +93,7 @@ func _clear_screen() -> void:
 			child.queue_free()
 
 func _display_scale() -> float:
-	return CardViewScript.display_scale(get_viewport_rect().size)
+	return float(TableLayoutScript.layout_for_viewport(get_viewport_rect().size).scale)
 
 func _is_compact_view() -> bool:
 	return DisplayServer.window_get_size().y < 500
@@ -202,12 +203,15 @@ func _layout_game_status_panel() -> void:
 	var panel := find_child("RoundStatusPanel", true, false) as Control
 	if not is_instance_valid(panel):
 		return
-	var hud_scale := _display_scale()
-	panel.position = Vector2(16.0, 10.0) * hud_scale
+	var layout: Dictionary = TableLayoutScript.layout_for_viewport(get_viewport_rect().size)
+	var scale := float(layout.scale)
+	var top_hud: Rect2 = layout.top_hud
+	var panel_height := maxf(32.0, 42.0 * scale)
+	panel.position = top_hud.position + Vector2(16.0, maxf(0.0, (top_hud.size.y - panel_height) * 0.5))
 	var label := panel.get_node("RoundStatus") as Label
 	var font_size := float(label.get_theme_font_size("font_size"))
 	var content_width := float(label.text.length()) * font_size * 0.56
-	panel.size = Vector2(minf(content_width + 22.0 * hud_scale, get_viewport_rect().size.x - 32.0 * hud_scale), 40.0 * hud_scale)
+	panel.size = Vector2(minf(content_width + 24.0 * scale, top_hud.size.x - 24.0 * scale), panel_height)
 
 func _line_edit(parent: Control, value: String, hint: String, changed: Callable) -> LineEdit:
 	var edit := LineEdit.new()
@@ -492,15 +496,29 @@ func _show_online_game() -> void:
 	if trading and exchange_role.begins_with("Slave ") and selected_card_ids.is_empty():
 		selected_card_ids = exchange_mandatory_ids.duplicate()
 	HandSorterScript.sort_hand(online_hand)
-	var title_text := "Round %d / %d  ·  %s" % [online_round, match_round_limit, "Card Exchange" if trading else ("3♣ Tie Break" if online_phase == "rps_tiebreak" else "Playing")]
-	var root := _root_box(title_text)
+	var title_text := "Round %d / %d · %s" % [online_round, match_round_limit, "Card Exchange" if trading else ("3♣ Tie Break" if online_phase == "rps_tiebreak" else "Playing")]
+	var menu_root := _root_box(title_text)
+	menu_root.queue_free()
+	var root := Control.new()
+	root.name = "OnlineGameplayLayout"
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(root)
 	var host := get_parent()
 	if host.has_method("set_game_background"):
 		host.set_game_background(online_players.size())
 	if online_phase == "rps_tiebreak":
-		_show_online_rps(root)
+		var rps_center := CenterContainer.new()
+		rps_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		root.add_child(rps_center)
+		var rps_content := VBoxContainer.new()
+		rps_content.alignment = BoxContainer.ALIGNMENT_CENTER
+		rps_center.add_child(rps_content)
+		_show_online_rps(rps_content)
 		_enforce_text_minimum(root)
 		return
+	if host.has_method("set_title_screen_enabled"):
+		host.set_title_screen_enabled(false)
+
 	var current_cards: Array[CardData] = []
 	var serialized_cards: Array = online_snapshot.get("current_cards", [])
 	if serialized_cards.is_empty() and not online_snapshot.get("current_card", {}).is_empty():
@@ -525,68 +543,78 @@ func _show_online_game() -> void:
 				SfxManager.play_card_play()
 		online_center_card_ids = next_center_ids.duplicate()
 	var table_view: Control = TablePresentationScript.new()
-	table_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	table_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	table_view.custom_minimum_size.y = 120.0 * _display_scale()
+	table_view.name = "TablePresentation"
+	table_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(table_view)
 	table_view.configure(online_players, online_player_index, int(online_snapshot.get("current_player", -1)), passed, current_cards, center_text, _is_compact_view(), animation_player)
 
-	var info := Label.new()
-	info.name = "TradeInfo" if trading else "GameInfo"
-	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var center_message := ""
 	if trading:
 		if exchange_role == "King":
-			info.text = "Role: King · Choose %d cards to give to Slave 1\nSelected: %d / %d" % [return_card_count, selected_card_ids.size(), return_card_count]
+			center_message = "Role: King · Choose %d cards for Slave 1\nSelected: %d / %d" % [return_card_count, selected_card_ids.size(), return_card_count]
 		elif exchange_role == "Queen":
-			info.text = "Role: Queen · Choose %d cards to give to Slave 2\nSelected: %d / %d" % [return_card_count, selected_card_ids.size(), return_card_count]
+			center_message = "Role: Queen · Choose %d cards for Slave 2\nSelected: %d / %d" % [return_card_count, selected_card_ids.size(), return_card_count]
 		elif exchange_role == "Seven":
-			info.text = "Role: Seven · Choose %d card(s) to give to Slave 3\nSelected: %d / %d" % [return_card_count, selected_card_ids.size(), return_card_count]
+			center_message = "Role: Seven · Choose %d card(s) for Slave 3\nSelected: %d / %d" % [return_card_count, selected_card_ids.size(), return_card_count]
 		elif exchange_role.begins_with("Slave "):
 			var upper_role := "King/Queen" if exchange_role == "Slave 1" and online_players.size() == 3 else ("Queen" if exchange_role == "Slave 2" else ("Seven" if exchange_role == "Slave 3" else "King"))
-			info.text = "%s: waiting to receive %d card(s) from %s." % [exchange_role, exchange_mandatory_ids.size(), upper_role]
+			center_message = "%s: waiting to receive %d card(s) from %s." % [exchange_role, exchange_mandatory_ids.size(), upper_role]
 		else:
-			info.text = "Waiting for card exchange..."
+			center_message = "Waiting for card exchange..."
 	else:
 		if int(online_snapshot.get("current_player", -1)) == online_player_index:
-			info.text = "Your turn"
+			center_message = "Your turn"
 		else:
 			var current_index := int(online_snapshot.get("current_player", -1))
 			var current_name := "the current player"
 			if current_index >= 0 and current_index < online_players.size():
 				current_name = str(online_players[current_index].get("name", current_name))
-			info.text = "Waiting for %s" % current_name
-	root.add_child(info)
-
+			center_message = "Waiting for %s" % current_name
 	if trading:
-		_add_trade_progress(root)
+		center_message += "\n" + " · ".join(_trade_summary_parts())
+	table_view.set_center_info(center_message)
+	if trading:
+		var trade_center := CenterContainer.new()
+		trade_center.name = "TradeWaitLayer"
+		trade_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		trade_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		root.add_child(trade_center)
+		var trade_content := VBoxContainer.new()
+		trade_content.alignment = BoxContainer.ALIGNMENT_CENTER
+		trade_center.add_child(trade_content)
+		_add_trade_progress(trade_content)
 		if not exchange_participant or _trade_is_ready(exchange_role):
 			var waiting := Label.new()
 			waiting.name = "TradeWaiting"
-			if not exchange_participant:
-				waiting.text = "Waiting Trade"
-			elif exchange_role.begins_with("Slave "):
-				var upper_role := "King/Queen" if exchange_role == "Slave 1" and online_players.size() == 3 else ("Queen" if exchange_role == "Slave 2" else ("Seven" if exchange_role == "Slave 3" else "King"))
-				waiting.text = "Waiting for %s to choose cards..." % upper_role
-			else:
-				waiting.text = "Waiting Trade"
+			waiting.text = "Waiting Trade"
 			waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			root.add_child(waiting)
+			trade_content.add_child(waiting)
 			_status(root)
 			_enforce_text_minimum(root)
 			return
 
+	var layout: Dictionary = TableLayoutScript.layout_for_viewport(get_viewport_rect().size)
+	var scale := float(layout.scale)
+	var bottom_rect: Rect2 = layout.bottom_hud
+	var bottom_hud := Control.new()
+	bottom_hud.name = "BottomHUD"
+	bottom_hud.position = bottom_rect.position
+	bottom_hud.size = bottom_rect.size
+	root.add_child(bottom_hud)
 	var hand_scroll := ScrollContainer.new()
+	hand_scroll.name = "OnlineHandScroll"
 	hand_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	hand_scroll.custom_minimum_size.y = minf(280.0 * _display_scale(), maxf(78.0, size.y * (0.24 if _is_compact_view() else 0.28)))
-	hand_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hand_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(hand_scroll)
+	hand_scroll.position = Vector2(24.0, 2.0) * scale
+	var hand_height := minf((77.0 if _is_compact_view() else 109.0) * scale, bottom_rect.size.y - 74.0 * scale)
+	hand_scroll.size = Vector2(maxf(1.0, bottom_rect.size.x - 48.0 * scale), hand_height)
+	bottom_hud.add_child(hand_scroll)
 	var hand_center := CenterContainer.new()
 	hand_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hand_center.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	hand_scroll.add_child(hand_center)
 	var hand_row := HBoxContainer.new()
 	hand_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	hand_row.add_theme_constant_override("separation", roundi((-21.0 if _is_compact_view() else -29.0) * _display_scale()))
+	hand_row.add_theme_constant_override("separation", roundi(-29.0 * scale))
 	hand_center.add_child(hand_row)
 	var selectable: Dictionary = {}
 	if trading:
@@ -602,23 +630,26 @@ func _show_online_game() -> void:
 		var card_id := card.card_id()
 		var card_button = CardViewScript.new()
 		var selected := selected_card_ids.has(card_id)
-		card_button.setup(card, selected, _is_compact_view(), _display_scale())
+		card_button.setup(card, selected, _is_compact_view(), scale)
 		card_button.disabled = not selected and not selectable.has(card_id)
 		card_button.set_available(not card_button.disabled)
 		if not (trading and exchange_role.begins_with("Slave ")):
 			card_button.pressed.connect(_toggle_card.bind(card_id))
-		CardViewScript.add_hand_slot(hand_row, card_button, _is_compact_view(), _display_scale())
+		CardViewScript.add_hand_slot(hand_row, card_button, _is_compact_view(), scale)
+	hand_row.add_theme_constant_override("separation", roundi(CardViewScript.hand_separation(online_hand.size(), hand_scroll.size.x, _is_compact_view(), scale)))
 
 	var buttons := HBoxContainer.new()
-	buttons.alignment = BoxContainer.ALIGNMENT_END
-	buttons.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	buttons.add_theme_constant_override("separation", roundi(4.0 * _display_scale()))
-	root.add_child(buttons)
+	buttons.name = "OnlineActions"
+	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
+	buttons.position = Vector2(0.0, hand_height)
+	buttons.size = Vector2(bottom_rect.size.x, maxf(0.0, bottom_rect.size.y - hand_height))
+	buttons.add_theme_constant_override("separation", roundi(8.0 * scale))
+	bottom_hud.add_child(buttons)
 	if trading:
 		var return_button := Button.new()
 		return_button.name = "ConfirmTradeButton"
 		return_button.text = "Confirm Trade (%d/%d)" % [selected_card_ids.size(), return_card_count]
-		return_button.custom_minimum_size = Vector2(220, 48 if _is_compact_view() else 56) * _display_scale()
+		return_button.custom_minimum_size = Vector2(220, 48) * scale
 		return_button.disabled = return_card_count <= 0 or selected_card_ids.size() != return_card_count
 		return_button.pressed.connect(_submit_exchange)
 		buttons.add_child(return_button)
@@ -633,6 +664,13 @@ func _show_online_game() -> void:
 	_status(root)
 	_enforce_text_minimum(root)
 
+func _trade_summary_parts() -> Array[String]:
+	var parts: Array[String] = []
+	for role in ["King", "Queen", "Seven", "Slave 1", "Slave 2", "Slave 3"]:
+		var value := str(exchange_readiness.get(role, ""))
+		if not value.is_empty():
+			parts.append("%s: %s" % [role, value])
+	return parts
 func _show_online_rps(root: Control) -> void:
 	var heading := Label.new()
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

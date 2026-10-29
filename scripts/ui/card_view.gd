@@ -21,7 +21,7 @@ func setup(card_data: CardData, is_selected: bool = false, compact: bool = false
 	card = card_data
 	selected = is_selected
 	compact_view = compact
-	card_scale_factor = maxf(1.0, scale_factor)
+	card_scale_factor = maxf(0.35, scale_factor)
 	text = ""
 	var card_width := 42.0 if compact_view else 58.0
 	var card_height := 64.0 if compact_view else 92.0
@@ -96,19 +96,24 @@ func _apply_styles() -> void:
 	modulate = Color.WHITE
 
 static func display_scale(viewport_size: Vector2) -> float:
-	var physical_size := DisplayServer.window_get_size()
 	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
 		return 1.0
-	if physical_size.x <= 0 or physical_size.y <= 0:
-		var fallback_ratio := minf(viewport_size.x / 1152.0, viewport_size.y / 648.0)
-		return clampf(fallback_ratio, 1.0, 2.25)
-	var output_scale := minf(float(physical_size.x) / viewport_size.x, float(physical_size.y) / viewport_size.y)
-	var mobile_compensation := 1.0 / maxf(0.25, output_scale) if output_scale < 1.0 else 1.0
-	return clampf(mobile_compensation, 1.0, 2.25)
+	return clampf(minf(viewport_size.x / 1920.0, viewport_size.y / 1080.0), 0.35, 2.25)
+
+static func hand_separation(card_count: int, available_width: float, compact: bool = false, scale_factor: float = 1.0) -> float:
+	var factor := maxf(0.35, scale_factor)
+	var card_width := (42.0 if compact else 58.0) * factor
+	var preferred_overlap := (21.0 if compact else 29.0) * factor
+	var minimum_overlap := 18.0 * factor
+	var required_width := float(card_count) * card_width - float(maxi(0, card_count - 1)) * preferred_overlap
+	if required_width <= available_width or card_count <= 1:
+		return -preferred_overlap
+	var fitted_overlap := card_width - (available_width - card_width) / float(card_count - 1)
+	return -clampf(fitted_overlap, minimum_overlap, card_width - 1.0 * factor)
 
 static func add_hand_slot(container: Container, view: CardView, compact: bool = false, scale_factor: float = 1.0) -> void:
-	var card_height := (64.0 if compact else 92.0) * maxf(1.0, scale_factor)
-	var lift := (13.0 if compact else 17.0) * maxf(1.0, scale_factor)
+	var card_height := (64.0 if compact else 92.0) * maxf(0.35, scale_factor)
+	var lift := (13.0 if compact else 17.0) * maxf(0.35, scale_factor)
 	var slot := Control.new()
 	slot.custom_minimum_size = Vector2(view.custom_minimum_size.x, card_height + lift)
 	view.position = Vector2(0.0, 0.0 if view.selected else lift)
@@ -116,7 +121,7 @@ static func add_hand_slot(container: Container, view: CardView, compact: bool = 
 	container.add_child(slot)
 
 static func make_pile(cards: Array, compact: bool = false, scale_factor: float = 1.0) -> Control:
-	var factor := maxf(1.0, scale_factor)
+	var factor := maxf(0.35, scale_factor)
 	var card_width := (42.0 if compact else 58.0) * factor
 	var card_height := (64.0 if compact else 92.0) * factor
 	var step := (17.0 if compact else 22.0) * factor
