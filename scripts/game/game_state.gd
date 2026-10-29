@@ -18,6 +18,7 @@ var current_card
 var last_player := -1
 var passed: Array[bool] = []
 var finishing_order: Array[int] = []
+var forfeited_order: Array[int] = []
 var rules = GameRulesScript.new()
 var turns = TurnManagerScript.new()
 var rng := RandomNumberGenerator.new()
@@ -31,6 +32,7 @@ func start(player_count: int, seed_value: int = 0, starting_player: int = -1) ->
 	var hands := DeckFactoryScript.deal(deck, player_count)
 	players.clear()
 	finishing_order.clear()
+	forfeited_order.clear()
 	for i in range(player_count):
 		HandSorterScript.sort_hand(hands[i])
 		players.append({"name": "You" if i == 0 else "Player %d" % (i + 1), "hand": hands[i], "finished": false, "is_human": i == 0})
@@ -105,16 +107,42 @@ func play_cards(player_index: int, requested_cards: Array) -> bool:
 	if hand.is_empty():
 		players[player_index].finished = true
 		finishing_order.append(player_index)
-		if players.size() - finishing_order.size() == 1:
+		if _active_player_count() <= 1:
 			for i in range(players.size()):
 				if not players[i].finished:
 					players[i].finished = true
 					finishing_order.append(i)
+			finishing_order.append_array(forfeited_order)
 			changed.emit()
 			return true
 	advance_turn()
 	changed.emit()
 	return true
+
+func forfeit_player(player_index: int) -> bool:
+	if player_index < 0 or player_index >= players.size() or players[player_index].finished:
+		return false
+	players[player_index].finished = true
+	passed[player_index] = true
+	forfeited_order.append(player_index)
+	if _active_player_count() <= 1:
+		for i in range(players.size()):
+			if not players[i].finished:
+				players[i].finished = true
+				finishing_order.append(i)
+		finishing_order.append_array(forfeited_order)
+	else:
+		if current_player == player_index:
+			advance_turn()
+	changed.emit()
+	return true
+
+func _active_player_count() -> int:
+	var count := 0
+	for player in players:
+		if not bool(player.get("finished", false)):
+			count += 1
+	return count
 
 func pass_turn(player_index: int) -> bool:
 	if player_index < 0 or player_index >= players.size():

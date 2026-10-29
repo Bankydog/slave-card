@@ -56,7 +56,9 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 		role_icons[i].visible = role_icons[i].texture != null; role_icons[i].custom_minimum_size = (Vector2(24, 20) if compact_view else Vector2(28, 24)) * layout_scale
 		detail_labels[i].text = details
 		var status := "WAITING"
-		if bool(player.get("finished", false)):
+		if bool(player.get("disconnected", false)) or bool(player.get("forfeited", false)):
+			status = "LEFT"
+		elif bool(player.get("finished", false)):
 			status = "FINISHED"
 		elif i < passed.size() and bool(passed[i]):
 			status = "PASSED"

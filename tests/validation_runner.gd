@@ -36,6 +36,9 @@ func _ready() -> void:
 	_test_table_presentation()
 	_test_bot_combinations()
 	_test_server_ready_authority()
+	_test_server_seat_swaps()
+	_test_server_disconnect_forfeit()
+	_test_multiple_disconnect_order()
 	_test_match_state_scoring()
 	_test_server_match_flow(4, 960)
 	_test_server_match_flow(8, 970)
@@ -155,6 +158,75 @@ func _test_server_match_flow(round_limit: int, host_peer: int) -> void:
 	_ready_peers(service, [host_peer, guest_peer])
 	service.handle_message(host_peer, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
 	_check(room.match_state.current_round == 1 and room.match_state.match_round_limit == round_limit and room.game_state.current_player == room.game_state.first_player_by_three_clubs(), "rematch preserves length and restores first-round 3-club starter")
+
+func _test_server_seat_swaps() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(1201, {"type":Protocol.CREATE_ROOM, "payload":{"name":"A", "max_players":3}})
+	var code := str(_last_message(1201, Protocol.ROOM_CREATED).payload.room_code)
+	service.handle_message(1202, {"type":Protocol.JOIN_ROOM, "payload":{"name":"B", "room_code":code}})
+	service.handle_message(1201, {"type":Protocol.SET_READY, "payload":{"ready":true}})
+	service.handle_message(1202, {"type":Protocol.SET_READY, "payload":{"ready":true}})
+	service.handle_message(1201, {"type":Protocol.REQUEST_SEAT_SWAP, "payload":{"target_peer_id":1202}})
+	var incoming: Dictionary = _last_message(1202, Protocol.LOBBY_STATE).payload.get("incoming_swap", {})
+	_check(not incoming.is_empty(), "seat swap request is shown only to its target")
+	service.handle_message(1203, {"type":Protocol.RESPOND_SEAT_SWAP, "payload":{"request_id":int(incoming.get("request_id", -1)), "accept":true}})
+	_check(int(service.rooms[code].members[0].peer_id) == 1201, "unjoined peer cannot fabricate a seat swap response")
+	service.handle_message(1202, {"type":Protocol.RESPOND_SEAT_SWAP, "payload":{"request_id":int(incoming.get("request_id", -1)), "accept":false}})
+	_check(int(service.rooms[code].members[0].peer_id) == 1201 and bool(service.rooms[code].members[0].ready), "reject leaves seats and ready state unchanged")
+	service.handle_message(1201, {"type":Protocol.REQUEST_SEAT_SWAP, "payload":{"target_peer_id":1202}})
+	incoming = _last_message(1202, Protocol.LOBBY_STATE).payload.get("incoming_swap", {})
+	service.handle_message(1202, {"type":Protocol.RESPOND_SEAT_SWAP, "payload":{"request_id":int(incoming.get("request_id", -1)), "accept":true}})
+	_check(int(service.rooms[code].members[0].peer_id) == 1202 and int(service.rooms[code].members[1].peer_id) == 1201, "accepted swap changes authoritative seat order")
+	_check(not bool(service.rooms[code].members[0].ready) and not bool(service.rooms[code].members[1].ready), "accepted seat swap resets human Ready state")
+	service.handle_message(1202, {"type":Protocol.REQUEST_SEAT_SWAP, "payload":{"target_peer_id":1201}})
+	service.handle_message(1202, {"type":Protocol.SET_READY, "payload":{"ready":true}})
+	var pending_before_leave: int = service.rooms[code].pending_seat_swaps.size()
+	service.handle_message(1202, {"type":Protocol.LEAVE_ROOM, "payload":{}})
+	_check(pending_before_leave == 1 and service.rooms[code].pending_seat_swaps.is_empty(), "leaving player clears pending seat swap requests")
+
+func _test_server_disconnect_forfeit() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(1301, {"type":Protocol.CREATE_ROOM, "payload":{"name":"A", "max_players":2, "match_round_limit":4}})
+	var code := str(_last_message(1301, Protocol.ROOM_CREATED).payload.room_code)
+	service.handle_message(1302, {"type":Protocol.JOIN_ROOM, "payload":{"name":"B", "room_code":code}})
+	_ready_peers(service, [1301, 1302])
+	service.handle_message(1301, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	var room: Dictionary = service.rooms[code]
+	var current_index: int = room.game_state.current_player
+	var departed_peer := int(room.members[current_index].peer_id)
+	service.peer_disconnected(departed_peer)
+	var result_message := Protocol.MATCH_FINISHED if room.phase == "match_finished" else Protocol.ROUND_FINISHED
+	var result: Dictionary = _last_message(1302 if departed_peer == 1301 else 1301, result_message).payload
+	_check(room.phase == "results" and room.game_state.finishing_order.size() == 2, "disconnect on the current turn immediately resolves a two-player round")
+	_check(int(room.game_state.finishing_order[-1]) == current_index and int(room.match_state.match_scores[current_index]) == 0, "forfeiter receives the last finishing place and zero round points")
+	_check(str(room.roles_by_player.get(current_index, "")) == "Slave 1", "two-player forfeiter receives the existing Slave 1 last-place role")
+	_check(bool(room.members[current_index].get("disconnected", false)) and not bool(room.members[current_index].get("is_bot", true)), "disconnected seat remains non-bot for the current round")
+	var survivor_peer := int(room.host_peer)
+	service.handle_message(survivor_peer, {"type":Protocol.START_NEXT_ROUND, "payload":{}})
+	_check(room.match_state.current_round == 2 and bool(room.members[current_index].get("is_bot", false)), "disconnected seat becomes a bot at the same index on the next round")
+	_check(not room.game_state.players[current_index].hand.is_empty(), "replacement bot receives a fresh dealt hand")
+
+func _test_multiple_disconnect_order() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(1401, {"type":Protocol.CREATE_ROOM, "payload":{"name":"A", "max_players":3}})
+	var code := str(_last_message(1401, Protocol.ROOM_CREATED).payload.room_code)
+	service.handle_message(1402, {"type":Protocol.JOIN_ROOM, "payload":{"name":"B", "room_code":code}})
+	service.handle_message(1403, {"type":Protocol.JOIN_ROOM, "payload":{"name":"C", "room_code":code}})
+	_ready_peers(service, [1401, 1402, 1403])
+	service.handle_message(1401, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	var room: Dictionary = service.rooms[code]
+	var active_index: int = room.game_state.current_player
+	var departed_indices: Array[int] = []
+	for i in range(room.members.size()):
+		if i != active_index:
+			departed_indices.append(i)
+	service.peer_disconnected(int(room.members[departed_indices[0]].peer_id))
+	_check(room.phase == "playing" and room.game_state.players[departed_indices[0]].finished and room.game_state._active_player_count() == 2, "a non-current forfeit is finished while remaining players stay active")
+	service.peer_disconnected(int(room.members[departed_indices[1]].peer_id))
+	_check(room.phase == "results" and room.game_state.finishing_order == [active_index, departed_indices[0], departed_indices[1]], "multiple disconnects settle in stable departure order behind the remaining player")
 
 func _test_invalid_match_length() -> void:
 	var service = RoomServiceScript.new()
@@ -663,7 +735,13 @@ func _test_table_presentation() -> void:
 	table.configure([{"name":"Ari", "card_count":5, "role":"King"}], 0, 0, [], [], "Lead a combination", false)
 	_check("Ari" in table.name_labels[0].text and table.name_labels[0].get_theme_font_size("font_size") >= 16 and table.detail_labels[0].get_theme_font_size("font_size") >= 16 and table.status_labels[0].get_theme_font_size("font_size") >= 16, "table shows the player's name with readable text at or above 16 px")
 	_check(table.role_icons[0].get_parent() == table.detail_labels[0].get_parent(), "role badge aligns with the card-count row")
+	table.configure([{"name":"Bank", "card_count":5, "disconnected":true, "forfeited":true}], 0, 0, [], [], "Lead a combination", false)
+	_check(table.status_labels[0].text == "LEFT", "disconnected seat shows LEFT instead of WAITING or TURN")
 	table.queue_free()
+	var action_assets_loaded := true
+	for asset_path in ["res://assets/gadget/bottom-play.png", "res://assets/gadget/bottom-pass.png", "res://assets/gadget/bottom-leave.png"]:
+		action_assets_loaded = action_assets_loaded and load(asset_path) is Texture2D
+	_check(action_assets_loaded, "all three gameplay image-button assets import as textures")
 	var suit_checks := [
 		{"suit":"Hearts", "symbol":"♥", "color":Color("#111111")},
 		{"suit":"Diamonds", "symbol":"♦", "color":Color("#111111")},

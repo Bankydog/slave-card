@@ -405,7 +405,8 @@ func _build_table() -> void:
 	status_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	var hud_scale := _display_scale()
 	status_panel.position = Vector2(16.0, 10.0) * hud_scale
-	status_panel.size = Vector2(get_viewport_rect().size.x * 0.36, 40.0 * hud_scale)
+	status_panel.custom_minimum_size.y = 40.0 * hud_scale
+	status_panel.size = Vector2.ZERO
 	var status_style := StyleBoxFlat.new()
 	status_style.bg_color = Color(0.05, 0.12, 0.10, 0.90)
 	status_style.border_color = Color("#c9a958")
@@ -460,16 +461,26 @@ func _build_table() -> void:
 	buttons_box.alignment = BoxContainer.ALIGNMENT_END
 	buttons_box.add_theme_constant_override("separation", roundi((5.0 if _is_compact_view() else 10.0) * _display_scale()))
 	action_row.add_child(buttons_box)
-	var play := Button.new()
+	var play := TextureButton.new()
 	play.name = "PlayButton"
-	play.text = "Play"
-	play.custom_minimum_size = Vector2(104 if _is_compact_view() else 150, 48 if _is_compact_view() else 56) * _display_scale()
+	play.texture_normal = load("res://assets/gadget/bottom-play.png")
+	play.texture_hover = play.texture_normal
+	play.texture_pressed = play.texture_normal
+	play.ignore_texture_size = true
+	play.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+	play.custom_minimum_size = Vector2(62 if _is_compact_view() else 74, 62 if _is_compact_view() else 74) * _display_scale()
+	play.tooltip_text = "Play"
 	play.pressed.connect(_play_selected)
 	buttons_box.add_child(play)
-	var pass_button := Button.new()
+	var pass_button := TextureButton.new()
 	pass_button.name = "PassButton"
-	pass_button.text = "Pass"
-	pass_button.custom_minimum_size = Vector2(104 if _is_compact_view() else 150, 48 if _is_compact_view() else 56) * _display_scale()
+	pass_button.texture_normal = load("res://assets/gadget/bottom-pass.png")
+	pass_button.texture_hover = pass_button.texture_normal
+	pass_button.texture_pressed = pass_button.texture_normal
+	pass_button.ignore_texture_size = true
+	pass_button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+	pass_button.custom_minimum_size = Vector2(62 if _is_compact_view() else 74, 62 if _is_compact_view() else 74) * _display_scale()
+	pass_button.tooltip_text = "Pass"
 	pass_button.pressed.connect(_pass)
 	buttons_box.add_child(pass_button)
 	var exchange_button := Button.new()
@@ -479,9 +490,15 @@ func _build_table() -> void:
 	exchange_button.pressed.connect(_submit_local_exchange)
 	exchange_button.hide()
 	buttons_box.add_child(exchange_button)
-	var menu := Button.new()
-	menu.text = "Menu"
-	menu.custom_minimum_size = Vector2(88 if _is_compact_view() else 100, 48 if _is_compact_view() else 56) * _display_scale()
+	var menu := TextureButton.new()
+	menu.name = "LeaveButton"
+	menu.texture_normal = load("res://assets/gadget/bottom-leave.png")
+	menu.texture_hover = menu.texture_normal
+	menu.texture_pressed = menu.texture_normal
+	menu.ignore_texture_size = true
+	menu.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+	menu.custom_minimum_size = Vector2(62 if _is_compact_view() else 74, 62 if _is_compact_view() else 74) * _display_scale()
+	menu.tooltip_text = "Leave"
 	menu.pressed.connect(_return_to_main_menu)
 	buttons_box.add_child(menu)
 
@@ -493,7 +510,9 @@ func _layout_round_status_panel() -> void:
 		return
 	var hud_scale := _display_scale()
 	panel.position = Vector2(16.0, 10.0) * hud_scale
-	panel.size = Vector2(get_viewport_rect().size.x * 0.36, 40.0 * hud_scale)
+	var font_size := float(title_label.get_theme_font_size("font_size"))
+	var content_width := float(title_label.text.length()) * font_size * 0.56
+	panel.size = Vector2(minf(content_width + 22.0 * hud_scale, get_viewport_rect().size.x - 32.0 * hud_scale), 40.0 * hud_scale)
 
 func _refresh() -> void:
 	if state == null or not is_instance_valid(hand_box):
@@ -512,6 +531,7 @@ func _refresh() -> void:
 	buttons_box.get_node("ExchangeButton").hide()
 	var current = state.players[state.current_player]
 	title_label.text = "Round %d / %d  ·  %s" % [match_progress.current_round, match_progress.match_round_limit, "YOUR TURN" if current.is_human else "%s is thinking…" % current.name]
+	_layout_round_status_panel()
 	var center_text := "Lead a combination"
 	if not state.current_cards.is_empty():
 		center_text = "%s · %s" % [str(state.current_combination.get("type", "Play")), str(state.players[state.last_player].name)]

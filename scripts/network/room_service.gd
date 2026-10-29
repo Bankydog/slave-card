@@ -32,6 +32,10 @@ func handle_message(peer_id: int, message: Dictionary) -> void:
 			_start_game(peer_id, payload)
 		Protocol.SET_READY:
 			_set_ready(peer_id, payload)
+		Protocol.REQUEST_SEAT_SWAP:
+			_request_seat_swap(peer_id, payload)
+		Protocol.RESPOND_SEAT_SWAP:
+			_respond_seat_swap(peer_id, payload)
 		Protocol.START_NEXT_ROUND:
 			_start_next_round(peer_id)
 		Protocol.REMATCH:
@@ -105,7 +109,9 @@ func _create_room(peer_id: int, payload: Dictionary) -> void:
 		"rps_choices": {},
 		"rps_round": 1,
 		"bot_delay": 0.0,
-		"last_finished_count": 0
+		"last_finished_count": 0,
+		"pending_seat_swaps": [],
+		"next_swap_id": 1
 	}
 	rooms[code] = room
 	room_by_peer[peer_id] = code
@@ -150,6 +156,7 @@ func _leave_room(peer_id: int, disconnected: bool = false) -> void:
 	if departed_index < 0:
 		return
 	var departed: Dictionary = room.members[departed_index]
+	_clear_swaps_for_peer(room, peer_id)
 	if room.phase == "lobby":
 		room.members.remove_at(departed_index)
 		if room.members.is_empty():
@@ -158,14 +165,104 @@ func _leave_room(peer_id: int, disconnected: bool = false) -> void:
 		if int(room.host_peer) == peer_id:
 			room.host_peer = int(room.members[0].peer_id)
 	else:
-		# A disconnected player remains as an empty seat for this prototype.
 		departed.peer_id = 0
-		departed.name = "%s (disconnected)" % departed.name
-		departed.is_bot = true
+		departed.disconnected = true
+		departed.forfeited_this_round = room.phase in ["playing", "card_exchange", "rps_tiebreak"]
+		departed.ready = false
 		if int(room.host_peer) == peer_id:
 			room.host_peer = _first_connected_peer(room)
+		if room.phase == "playing" and room.game_state != null:
+			room.game_state.forfeit_player(departed_index)
+			_after_action(room)
+		elif room.phase in ["card_exchange", "rps_tiebreak"] and room.game_state != null:
+			_resolve_preplay_forfeit(room, departed_index)
 	_broadcast(room, Protocol.PLAYER_LEFT, {"player_index": departed_index, "name": departed.name, "disconnected": disconnected})
 	_broadcast_lobby(room)
+
+func _peer_in_pending_swap(room: Dictionary, peer_id: int) -> bool:
+	for request in room.get("pending_seat_swaps", []):
+		if int(request.get("requester_peer", 0)) == peer_id or int(request.get("target_peer", 0)) == peer_id:
+			return true
+	return false
+
+func _clear_swaps_for_peer(room: Dictionary, peer_id: int) -> void:
+	var kept: Array[Dictionary] = []
+	for request in room.get("pending_seat_swaps", []):
+		if int(request.get("requester_peer", 0)) != peer_id and int(request.get("target_peer", 0)) != peer_id:
+			kept.append(request)
+	room.pending_seat_swaps = kept
+
+func _request_seat_swap(peer_id: int, payload: Dictionary) -> void:
+	var room = _room_for_peer(peer_id)
+	if room == null or room.phase != "lobby":
+		_reject(peer_id, "Seats can only be swapped in the lobby.")
+		return
+	var requester_index := _player_index_for_peer(room, peer_id)
+	var target_peer := int(payload.get("target_peer_id", 0))
+	var target_index := _player_index_for_peer(room, target_peer)
+	if requester_index < 0 or target_index < 0 or requester_index == target_index:
+		_reject(peer_id, "That player is no longer available to swap with.")
+		return
+	if bool(room.members[requester_index].get("is_bot", false)) or bool(room.members[target_index].get("is_bot", false)):
+		_reject(peer_id, "Seat swaps are only available between human players.")
+		return
+	if _peer_in_pending_swap(room, peer_id) or _peer_in_pending_swap(room, target_peer):
+		_reject(peer_id, "One of those players already has a pending seat swap.")
+		return
+	var request_id := int(room.next_swap_id)
+	room.next_swap_id = request_id + 1
+	room.pending_seat_swaps.append({"request_id": request_id, "requester_peer": peer_id, "target_peer": target_peer})
+	_broadcast_lobby(room)
+
+func _respond_seat_swap(peer_id: int, payload: Dictionary) -> void:
+	var room = _room_for_peer(peer_id)
+	if room == null or room.phase != "lobby":
+		_reject(peer_id, "Seat swaps are only available in the lobby.")
+		return
+	var request_id := int(payload.get("request_id", -1))
+	var request_index := -1
+	for i in range(room.pending_seat_swaps.size()):
+		if int(room.pending_seat_swaps[i].get("request_id", -2)) == request_id:
+			request_index = i
+			break
+	if request_index < 0 or int(room.pending_seat_swaps[request_index].get("target_peer", 0)) != peer_id:
+		_reject(peer_id, "That seat swap request is no longer valid.")
+		return
+	var request: Dictionary = room.pending_seat_swaps[request_index]
+	room.pending_seat_swaps.remove_at(request_index)
+	var requester_peer := int(request.get("requester_peer", 0))
+	if bool(payload.get("accept", false)):
+		var requester_index := _player_index_for_peer(room, requester_peer)
+		var target_index := _player_index_for_peer(room, peer_id)
+		if requester_index < 0 or target_index < 0 or requester_index == target_index or bool(room.members[requester_index].get("is_bot", false)) or bool(room.members[target_index].get("is_bot", false)):
+			_reject(peer_id, "That seat swap request is no longer valid.")
+			_broadcast_lobby(room)
+			return
+		var requester: Dictionary = room.members[requester_index]
+		room.members[requester_index] = room.members[target_index]
+		room.members[target_index] = requester
+		for member in room.members:
+			if not bool(member.get("is_bot", false)):
+				member["ready"] = false
+		_broadcast_lobby(room)
+		_send(requester_peer, Protocol.SEAT_SWAP_RESULT, {"accepted": true})
+		return
+	_broadcast_lobby(room)
+	_send(requester_peer, Protocol.SEAT_SWAP_RESULT, {"accepted": false})
+
+func _resolve_preplay_forfeit(room: Dictionary, departed_index: int) -> void:
+	# Exchange and RPS happen before ordinary turn resolution; settle deterministically.
+	var order: Array[int] = []
+	for i in range(room.members.size()):
+		if i != departed_index:
+			order.append(i)
+	order.append(departed_index)
+	room.game_state.finishing_order = order
+	for i in range(room.game_state.players.size()):
+		room.game_state.players[i].finished = true
+	room.game_state.changed.emit()
+	room.phase = "playing"
+	_finish_round(room)
 
 func _start_game(peer_id: int, payload: Dictionary) -> void:
 	var room = _room_for_peer(peer_id)
@@ -186,6 +283,7 @@ func _start_game(peer_id: int, payload: Dictionary) -> void:
 	if final_count < 2:
 		_reject(peer_id, "At least two seats are needed. Add bots or invite a player.")
 		return
+	room.pending_seat_swaps.clear()
 	if fill_bots:
 		while room.members.size() < int(room.max_players):
 			room.members.append({"peer_id": 0, "name": "Bot %d" % next_bot_name, "is_bot": true, "ready": true})
@@ -222,6 +320,11 @@ func _rematch(peer_id: int) -> void:
 	room.last_finished_count = 0
 	room.bot_delay = 0.0
 	for member in room.members:
+		if bool(member.get("disconnected", false)):
+			member["is_bot"] = true
+			member["name"] = "%s (Bot)" % str(member.get("name", "Player"))
+			member.erase("disconnected")
+			member.erase("forfeited_this_round")
 		member["ready"] = bool(member.get("is_bot", false))
 		member["role"] = ""
 	_broadcast_lobby(room)
@@ -240,7 +343,7 @@ func _set_ready(peer_id: int, payload: Dictionary) -> void:
 
 func _all_humans_ready(room: Dictionary) -> bool:
 	for member in room.members:
-		if not bool(member.get("is_bot", false)) and not bool(member.get("ready", false)):
+		if not bool(member.get("is_bot", false)) and int(member.get("peer_id", 0)) > 0 and not bool(member.get("ready", false)):
 			return false
 	return true
 
@@ -267,6 +370,13 @@ func _start_round(room: Dictionary) -> void:
 	var previous_game = room.game_state
 	if int(room.match_state.current_round) > 0 and previous_game != null and not previous_game.finishing_order.is_empty():
 		round_starter = previous_game.finishing_order[0]
+	for member in room.members:
+		if bool(member.get("disconnected", false)):
+			member["is_bot"] = true
+			member["name"] = "%s (Bot)" % str(member.get("name", "Player"))
+			member["ready"] = true
+			member.erase("disconnected")
+			member.erase("forfeited_this_round")
 	if not room.match_state.advance_round():
 		return
 	room.round_number = int(room.match_state.current_round)
@@ -603,6 +713,8 @@ func _public_turn(room: Dictionary) -> Dictionary:
 			"name": room.members[i].name,
 			"card_count": player.hand.size(),
 			"finished": player.finished,
+			"disconnected": bool(room.members[i].get("disconnected", false)),
+			"forfeited": bool(room.members[i].get("forfeited_this_round", false)),
 			"passed": game.passed[i],
 			"role": str(room.roles_by_player.get(i, ""))
 		})
@@ -631,8 +743,11 @@ func _public_players(room: Dictionary) -> Array[Dictionary]:
 		var member: Dictionary = room.members[i]
 		result.append({
 			"player_index": i,
+			"peer_id": int(member.get("peer_id", 0)),
 			"name": member.name,
 			"is_bot": member.is_bot,
+			"disconnected": bool(member.get("disconnected", false)),
+			"forfeited": bool(member.get("forfeited_this_round", false)),
 			"is_host": int(member.peer_id) > 0 and int(member.peer_id) == int(room.host_peer),
 			"ready": bool(member.get("is_bot", false)) or bool(member.get("ready", false)),
 			"role": str(room.roles_by_player.get(i, ""))
@@ -643,7 +758,7 @@ func _broadcast_lobby(room: Dictionary) -> void:
 	var human_count := 0
 	var ready_count := 0
 	for member in room.members:
-		if not bool(member.get("is_bot", false)):
+		if not bool(member.get("is_bot", false)) and int(member.get("peer_id", 0)) > 0:
 			human_count += 1
 			if bool(member.get("ready", false)):
 				ready_count += 1
@@ -666,6 +781,15 @@ func _broadcast_lobby(room: Dictionary) -> void:
 		var recipient_payload := payload.duplicate(true)
 		recipient_payload["your_player_index"] = player_index
 		recipient_payload["is_host"] = peer_id == int(room.host_peer)
+		recipient_payload["incoming_swap"] = {}
+		recipient_payload["outgoing_swaps"] = []
+		for request in room.get("pending_seat_swaps", []):
+			if int(request.get("target_peer", 0)) == peer_id:
+				var requester_index := _player_index_for_peer(room, int(request.get("requester_peer", 0)))
+				if requester_index >= 0:
+					recipient_payload["incoming_swap"] = {"request_id": int(request.request_id), "name": str(room.members[requester_index].name)}
+			if int(request.get("requester_peer", 0)) == peer_id:
+				recipient_payload.outgoing_swaps.append(int(request.get("request_id", 0)))
 		_send(peer_id, Protocol.LOBBY_STATE, recipient_payload)
 
 func _broadcast(room: Dictionary, message_type: String, payload: Dictionary) -> void:

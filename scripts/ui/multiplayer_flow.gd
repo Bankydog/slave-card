@@ -27,6 +27,8 @@ var room_players: Array = []
 var lobby_all_ready := false
 var lobby_ready_count := 0
 var lobby_human_count := 0
+var incoming_seat_swap: Dictionary = {}
+var outgoing_seat_swaps: Array = []
 var is_host := false
 var local_player_index := -1
 var online_player_index := -1
@@ -126,7 +128,7 @@ func get_display_name() -> String:
 func _root_box(title_text: String) -> VBoxContainer:
 	_clear_screen()
 	var root := VBoxContainer.new()
-	if page in ["main", "create", "join"]:
+	if page in ["main", "create", "join", "lobby"]:
 		var center := CenterContainer.new()
 		center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		center.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -139,17 +141,19 @@ func _root_box(title_text: String) -> VBoxContainer:
 		panel_style.border_color = Color(0.24, 0.16, 0.10, 0.95)
 		panel_style.set_border_width_all(roundi(3.0 * _display_scale()))
 		panel_style.set_corner_radius_all(roundi(18.0 * _display_scale()))
-		panel_style.content_margin_left = 24.0 * _display_scale()
-		panel_style.content_margin_right = 24.0 * _display_scale()
-		panel_style.content_margin_top = 18.0 * _display_scale()
-		panel_style.content_margin_bottom = 18.0 * _display_scale()
+		var panel_padding_x := 8.0 if page == "lobby" and _is_compact_view() else 24.0
+		var panel_padding_y := 8.0 if page == "lobby" and _is_compact_view() else 18.0
+		panel_style.content_margin_left = panel_padding_x * _display_scale()
+		panel_style.content_margin_right = panel_padding_x * _display_scale()
+		panel_style.content_margin_top = panel_padding_y * _display_scale()
+		panel_style.content_margin_bottom = panel_padding_y * _display_scale()
 		panel.add_theme_stylebox_override("panel", panel_style)
 		center.add_child(panel)
 		panel.add_child(root)
 	else:
 		root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		add_child(root)
-	root.add_theme_constant_override("separation", roundi((4.0 if _is_compact_view() else 12.0) * _display_scale()))
+	root.add_theme_constant_override("separation", roundi((2.0 if page == "lobby" and _is_compact_view() else (4.0 if _is_compact_view() else 12.0)) * _display_scale()))
 	if not title_text.is_empty():
 		if page == "game":
 			_add_game_status_panel(title_text)
@@ -158,7 +162,7 @@ func _root_box(title_text: String) -> VBoxContainer:
 			heading.text = title_text
 			heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			heading.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-			heading.custom_minimum_size.y = 36.0 * _display_scale()
+			heading.custom_minimum_size.y = (28.0 if page == "lobby" and _is_compact_view() else 36.0) * _display_scale()
 			heading.add_theme_font_size_override("font_size", maxi(16, roundi((22.0 if _is_compact_view() else 32.0) * _display_scale())))
 			root.add_child(heading)
 	return root
@@ -170,7 +174,8 @@ func _add_game_status_panel(status_text: String) -> void:
 	status_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	var hud_scale := _display_scale()
 	status_panel.position = Vector2(16.0, 10.0) * hud_scale
-	status_panel.size = Vector2(get_viewport_rect().size.x * 0.36, 40.0 * hud_scale)
+	status_panel.custom_minimum_size.y = 40.0 * hud_scale
+	status_panel.size = Vector2.ZERO
 	var status_style := StyleBoxFlat.new()
 	status_style.bg_color = Color(0.05, 0.12, 0.10, 0.90)
 	status_style.border_color = Color("#c9a958")
@@ -199,7 +204,10 @@ func _layout_game_status_panel() -> void:
 		return
 	var hud_scale := _display_scale()
 	panel.position = Vector2(16.0, 10.0) * hud_scale
-	panel.size = Vector2(get_viewport_rect().size.x * 0.36, 40.0 * hud_scale)
+	var label := panel.get_node("RoundStatus") as Label
+	var font_size := float(label.get_theme_font_size("font_size"))
+	var content_width := float(label.text.length()) * font_size * 0.56
+	panel.size = Vector2(minf(content_width + 22.0 * hud_scale, get_viewport_rect().size.x - 32.0 * hud_scale), 40.0 * hud_scale)
 
 func _line_edit(parent: Control, value: String, hint: String, changed: Callable) -> LineEdit:
 	var edit := LineEdit.new()
@@ -249,7 +257,7 @@ func _action_button(parent: Control, text_value: String, action: Callable, width
 	var button := Button.new()
 	button.name = "Action_%s" % text_value.replace(" ", "")
 	button.text = text_value
-	button.custom_minimum_size = Vector2(width, 42 if _is_compact_view() else 52) * _display_scale()
+	button.custom_minimum_size = Vector2(width, 34 if page == "lobby" and _is_compact_view() else (42 if _is_compact_view() else 52)) * _display_scale()
 	button.add_theme_font_size_override("font_size", maxi(16, roundi(16.0 * _display_scale())))
 	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	button.pressed.connect(action)
@@ -366,24 +374,48 @@ func _show_join_room() -> void:
 	_status(root)
 	_enforce_text_minimum(root)
 
+func _copy_room_code(button: Button) -> void:
+	if room_code.is_empty() or not is_instance_valid(button):
+		return
+	DisplayServer.clipboard_set(room_code)
+	button.text = "Copied!"
+	get_tree().create_timer(1.4).timeout.connect(func():
+		if is_instance_valid(button):
+			button.text = "Copy"
+	)
+
 func _show_lobby() -> void:
 	page = "lobby"
 	var root := _root_box("Room Lobby")
+	var code_row := HBoxContainer.new()
+	code_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	code_row.add_theme_constant_override("separation", roundi(8.0 * _display_scale()))
 	var code_label := Label.new()
 	code_label.text = "ROOM CODE   %s" % room_code
 	code_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	code_label.add_theme_font_size_override("font_size", 26)
-	root.add_child(code_label)
+	code_label.add_theme_font_size_override("font_size", 24)
+	code_row.add_child(code_label)
+	var copy_button := Button.new()
+	copy_button.text = "Copy"
+	copy_button.custom_minimum_size = Vector2(82, 32 if _is_compact_view() else 40) * _display_scale()
+	copy_button.pressed.connect(_copy_room_code.bind(copy_button))
+	code_row.add_child(copy_button)
+	root.add_child(code_row)
+	if not incoming_seat_swap.is_empty():
+		var request_row := HBoxContainer.new()
+		request_row.alignment = BoxContainer.ALIGNMENT_CENTER
+		var request_label := Label.new()
+		request_label.text = "%s wants to swap seats with you." % str(incoming_seat_swap.get("name", "A player"))
+		request_row.add_child(request_label)
+		_action_button(request_row, "Accept", func(): _send_request(Protocol.RESPOND_SEAT_SWAP, {"request_id": int(incoming_seat_swap.get("request_id", -1)), "accept": true}), 110)
+		_action_button(request_row, "Reject", func(): _send_request(Protocol.RESPOND_SEAT_SWAP, {"request_id": int(incoming_seat_swap.get("request_id", -1)), "accept": false}), 110)
+		root.add_child(request_row)
 	var count_label := Label.new()
-	count_label.text = "%d / %d connected" % [room_players.size(), room_max_players]
+	count_label.text = "%d / %d humans connected  ·  Match: %d rounds" % [lobby_human_count, room_max_players, match_round_limit]
 	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(count_label)
-	var length_label := Label.new()
-	length_label.text = "Match length: %d rounds" % match_round_limit
-	length_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	root.add_child(length_label)
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size.y = 80 if _is_compact_view() else 220
+	scroll.custom_minimum_size.y = 48 if _is_compact_view() else 200
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var centered := CenterContainer.new()
@@ -399,38 +431,26 @@ func _show_lobby() -> void:
 	_update_lobby_grid_columns(grid)
 	scroll.resized.connect(_update_lobby_grid_columns.bind(grid))
 	for player in room_players:
-		var card := PanelContainer.new()
-		card.custom_minimum_size = Vector2(220.0, 54.0) * _display_scale()
-		var card_content := Control.new()
-		card_content.custom_minimum_size = card.custom_minimum_size
-		card_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		card_content.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		card.add_child(card_content)
-		var centered_name := CenterContainer.new()
-		centered_name.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		var line := Label.new()
-		var badge := "Host" if bool(player.get("is_host", false)) else ("Bot" if bool(player.get("is_bot", false)) else "Guest")
-		line.text = "%s  ·  %s" % [str(player.get("name", "Guest")), badge]
-		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		line.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		line.add_theme_font_size_override("font_size", maxi(16, roundi(18.0 * _display_scale())))
-		centered_name.add_child(line)
-		card_content.add_child(centered_name)
-		if bool(player.get("ready", false)):
-			var ready_icon := TextureRect.new()
-			ready_icon.name = "ReadyIcon"
-			ready_icon.texture = load("res://assets/gadget/check.png")
-			ready_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-			ready_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-			var icon_size := 24.0 * _display_scale()
-			var icon_margin := 6.0 * _display_scale()
-			ready_icon.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-			ready_icon.offset_left = -icon_size - icon_margin
-			ready_icon.offset_top = icon_margin
-			ready_icon.offset_right = -icon_margin
-			ready_icon.offset_bottom = icon_size + icon_margin
-			card_content.add_child(ready_icon)
+		var player_peer := int(player.get("peer_id", 0))
+		var is_bot := bool(player.get("is_bot", false))
+		var is_local := int(player.get("player_index", -1)) == local_player_index
+		var card := Button.new()
+		card.custom_minimum_size = Vector2(220.0, 42.0 if _is_compact_view() else 54.0) * _display_scale()
+		var badge := "Host" if bool(player.get("is_host", false)) else ("Bot" if is_bot else "Guest")
+		var ready_text := "Ready" if bool(player.get("ready", false)) else "Not Ready"
+		card.text = "%s  ·  %s  ·  %s" % [str(player.get("name", "Guest")), badge, ready_text]
+		if bool(player.get("disconnected", false)):
+			card.text = "%s  ·  LEFT" % str(player.get("name", "Player"))
+		card.add_theme_font_size_override("font_size", maxi(16, roundi(17.0 * _display_scale())))
+		card.disabled = is_bot or is_local or player_peer <= 0 or not outgoing_seat_swaps.is_empty() or not incoming_seat_swap.is_empty()
+		if not card.disabled:
+			card.pressed.connect(func(): _send_request(Protocol.REQUEST_SEAT_SWAP, {"target_peer_id": player_peer}))
 		grid.add_child(card)
+	if not outgoing_seat_swaps.is_empty():
+		var outgoing_label := Label.new()
+		outgoing_label.text = "Seat swap request sent. Waiting for a reply."
+		outgoing_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		root.add_child(outgoing_label)
 	var ready_summary := Label.new()
 	ready_summary.text = "Ready %d / %d" % [lobby_ready_count, lobby_human_count]
 	ready_summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -452,6 +472,19 @@ func _show_lobby() -> void:
 	_action_button(root, "Leave Room", _leave_room, 170)
 	_status(root)
 	_enforce_text_minimum(root)
+
+func _image_action_button(button_name: String, texture_path: String, tooltip: String, action: Callable) -> TextureButton:
+	var button := TextureButton.new()
+	button.name = button_name
+	button.texture_normal = load(texture_path)
+	button.texture_hover = button.texture_normal
+	button.texture_pressed = button.texture_normal
+	button.ignore_texture_size = true
+	button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+	button.custom_minimum_size = Vector2(62 if _is_compact_view() else 74, 62 if _is_compact_view() else 74) * _display_scale()
+	button.tooltip_text = tooltip
+	button.pressed.connect(action)
+	return button
 
 func _show_online_game() -> void:
 	page = "game"
@@ -577,7 +610,9 @@ func _show_online_game() -> void:
 		CardViewScript.add_hand_slot(hand_row, card_button, _is_compact_view(), _display_scale())
 
 	var buttons := HBoxContainer.new()
-	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
+	buttons.alignment = BoxContainer.ALIGNMENT_END
+	buttons.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	buttons.add_theme_constant_override("separation", roundi(4.0 * _display_scale()))
 	root.add_child(buttons)
 	if trading:
 		var return_button := Button.new()
@@ -588,17 +623,13 @@ func _show_online_game() -> void:
 		return_button.pressed.connect(_submit_exchange)
 		buttons.add_child(return_button)
 	else:
-		var play_button := Button.new()
-		play_button.text = "Play"
-		play_button.custom_minimum_size = Vector2(140, 48 if _is_compact_view() else 56) * _display_scale()
+		var play_button := _image_action_button("PlayButton", "res://assets/gadget/bottom-play.png", "Play", _submit_play)
 		play_button.disabled = selected_card_ids.is_empty() or int(online_snapshot.get("current_player", -1)) != online_player_index
-		play_button.pressed.connect(_submit_play)
 		buttons.add_child(play_button)
-		var pass_button := Button.new()
-		pass_button.text = "Pass"
-		pass_button.custom_minimum_size = Vector2(140, 48 if _is_compact_view() else 56) * _display_scale()
-		pass_button.pressed.connect(func(): _send_request(Protocol.PASS, {}))
+		var pass_button := _image_action_button("PassButton", "res://assets/gadget/bottom-pass.png", "Pass", func(): _send_request(Protocol.PASS, {}))
 		buttons.add_child(pass_button)
+		var leave_button := _image_action_button("LeaveButton", "res://assets/gadget/bottom-leave.png", "Leave", _leave_room)
+		buttons.add_child(leave_button)
 	_status(root)
 	_enforce_text_minimum(root)
 
@@ -875,6 +906,8 @@ func _on_server_message(message: Dictionary) -> void:
 			match_round_limit = int(payload.get("match_round_limit", match_round_limit))
 			online_round = int(payload.get("current_round", online_round))
 			room_players = payload.get("players", [])
+			incoming_seat_swap = payload.get("incoming_swap", {})
+			outgoing_seat_swaps = payload.get("outgoing_swaps", [])
 			local_player_index = int(payload.get("your_player_index", -1))
 			is_host = bool(payload.get("is_host", is_host))
 			lobby_all_ready = bool(payload.get("all_ready", false))
@@ -952,6 +985,9 @@ func _on_server_message(message: Dictionary) -> void:
 			online_snapshot = payload.duplicate(true)
 			online_roles = payload.get("roles_by_player", online_roles)
 			_show_final_match_result(payload)
+		Protocol.SEAT_SWAP_RESULT:
+			status_text = "Seat swap accepted." if bool(payload.get("accepted", false)) else "Seat swap declined."
+			_refresh_current_page()
 		Protocol.ACTION_REJECTED:
 			status_text = str(payload.get("reason", "The action was rejected."))
 			_refresh_current_page()
@@ -993,6 +1029,8 @@ func _leave_room() -> void:
 		endpoint.send_intent(Protocol.LEAVE_ROOM, {})
 		endpoint.disconnect_from_server()
 	room_code = ""
+	incoming_seat_swap.clear()
+	outgoing_seat_swaps.clear()
 	last_round_sound = -1
 	online_center_initialized = false
 	room_players.clear()
@@ -1028,7 +1066,7 @@ func _enforce_node_text_minimum(node: Node) -> void:
 	if node is Label or node is Button or node is LineEdit:
 		var control := node as Control
 		control.add_theme_font_size_override("font_size", maxi(16, control.get_theme_font_size("font_size")))
-	if node is Label and page in ["main", "create", "join"]:
+	if node is Label and page in ["main", "create", "join", "lobby"]:
 		(node as Label).add_theme_color_override("font_color", Color(0.12, 0.09, 0.07))
 	for child in node.get_children():
 		_enforce_node_text_minimum(child)
