@@ -62,6 +62,7 @@ var status_label: Label
 func _ready() -> void:
 	name = "MultiplayerFlow"
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	resized.connect(_layout_game_status_panel)
 	endpoint = ClientEndpointScript.new()
 	endpoint.name = "NetworkEndpoint"
 	add_child(endpoint)
@@ -150,14 +151,55 @@ func _root_box(title_text: String) -> VBoxContainer:
 		add_child(root)
 	root.add_theme_constant_override("separation", roundi((4.0 if _is_compact_view() else 12.0) * _display_scale()))
 	if not title_text.is_empty():
-		var heading := Label.new()
-		heading.text = title_text
-		heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		heading.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		heading.custom_minimum_size.y = 36.0 * _display_scale()
-		heading.add_theme_font_size_override("font_size", maxi(16, roundi((22.0 if _is_compact_view() else 32.0) * _display_scale())))
-		root.add_child(heading)
+		if page == "game":
+			_add_game_status_panel(title_text)
+		else:
+			var heading := Label.new()
+			heading.text = title_text
+			heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			heading.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			heading.custom_minimum_size.y = 36.0 * _display_scale()
+			heading.add_theme_font_size_override("font_size", maxi(16, roundi((22.0 if _is_compact_view() else 32.0) * _display_scale())))
+			root.add_child(heading)
 	return root
+
+func _add_game_status_panel(status_text: String) -> void:
+	var status_panel := PanelContainer.new()
+	status_panel.name = "RoundStatusPanel"
+	status_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	var hud_scale := _display_scale()
+	status_panel.position = Vector2(16.0, 10.0) * hud_scale
+	status_panel.size = Vector2(get_viewport_rect().size.x * 0.36, 40.0 * hud_scale)
+	var status_style := StyleBoxFlat.new()
+	status_style.bg_color = Color(0.05, 0.12, 0.10, 0.90)
+	status_style.border_color = Color("#c9a958")
+	status_style.set_border_width_all(1)
+	status_style.set_corner_radius_all(6)
+	status_style.content_margin_left = 8.0 * hud_scale
+	status_style.content_margin_right = 8.0 * hud_scale
+	status_style.content_margin_top = 3.0 * hud_scale
+	status_style.content_margin_bottom = 3.0 * hud_scale
+	status_panel.add_theme_stylebox_override("panel", status_style)
+	add_child(status_panel)
+	var heading := Label.new()
+	heading.name = "RoundStatus"
+	heading.text = status_text
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	heading.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	heading.clip_text = true
+	heading.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	heading.add_theme_font_size_override("font_size", maxi(16, roundi(18.0 * hud_scale)))
+	status_panel.add_child(heading)
+	_layout_game_status_panel()
+
+func _layout_game_status_panel() -> void:
+	var panel := find_child("RoundStatusPanel", true, false) as Control
+	if not is_instance_valid(panel):
+		return
+	var hud_scale := _display_scale()
+	panel.position = Vector2(16.0, 10.0) * hud_scale
+	panel.size = Vector2(get_viewport_rect().size.x * 0.36, 40.0 * hud_scale)
 
 func _line_edit(parent: Control, value: String, hint: String, changed: Callable) -> LineEdit:
 	var edit := LineEdit.new()

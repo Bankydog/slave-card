@@ -399,9 +399,32 @@ func _build_table() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_theme_constant_override("separation", roundi((4.0 if _is_compact_view() else 10.0) * _display_scale()))
 	add_child(root)
+	var status_panel := PanelContainer.new()
+	status_panel.name = "RoundStatusPanel"
+	status_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	var hud_scale := _display_scale()
+	status_panel.position = Vector2(16.0, 10.0) * hud_scale
+	status_panel.size = Vector2(get_viewport_rect().size.x * 0.36, 40.0 * hud_scale)
+	var status_style := StyleBoxFlat.new()
+	status_style.bg_color = Color(0.05, 0.12, 0.10, 0.90)
+	status_style.border_color = Color("#c9a958")
+	status_style.set_border_width_all(1)
+	status_style.set_corner_radius_all(6)
+	status_style.content_margin_left = 8.0 * hud_scale
+	status_style.content_margin_right = 8.0 * hud_scale
+	status_style.content_margin_top = 3.0 * hud_scale
+	status_style.content_margin_bottom = 3.0 * hud_scale
+	status_panel.add_theme_stylebox_override("panel", status_style)
+	add_child(status_panel)
 	title_label = Label.new()
-	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	root.add_child(title_label)
+	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title_label.clip_text = true
+	title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	title_label.add_theme_font_size_override("font_size", maxi(16, roundi(18.0 * hud_scale)))
+	status_panel.add_child(title_label)
+	_layout_round_status_panel()
 	table_presentation = TablePresentationScript.new()
 	table_presentation.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	table_presentation.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -422,37 +445,60 @@ func _build_table() -> void:
 	hand_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	hand_box.add_theme_constant_override("separation", roundi((-21.0 if _is_compact_view() else -29.0) * _display_scale()))
 	hand_center.add_child(hand_box)
+	var action_margin := MarginContainer.new()
+	action_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	action_margin.add_theme_constant_override("margin_right", roundi(18.0 * _display_scale()))
+	action_margin.add_theme_constant_override("margin_bottom", roundi(10.0 * _display_scale()))
+	root.add_child(action_margin)
+	var action_row := HBoxContainer.new()
+	action_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	action_margin.add_child(action_row)
+	var action_spacer := Control.new()
+	action_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	action_row.add_child(action_spacer)
 	buttons_box = HBoxContainer.new()
-	buttons_box.alignment = BoxContainer.ALIGNMENT_CENTER
-	root.add_child(buttons_box)
+	buttons_box.alignment = BoxContainer.ALIGNMENT_END
+	buttons_box.add_theme_constant_override("separation", roundi((5.0 if _is_compact_view() else 10.0) * _display_scale()))
+	action_row.add_child(buttons_box)
 	var play := Button.new()
 	play.name = "PlayButton"
 	play.text = "Play"
-	play.custom_minimum_size = Vector2(150, 48 if _is_compact_view() else 56) * _display_scale()
+	play.custom_minimum_size = Vector2(104 if _is_compact_view() else 150, 48 if _is_compact_view() else 56) * _display_scale()
 	play.pressed.connect(_play_selected)
 	buttons_box.add_child(play)
 	var pass_button := Button.new()
 	pass_button.name = "PassButton"
 	pass_button.text = "Pass"
-	pass_button.custom_minimum_size = Vector2(150, 48 if _is_compact_view() else 56) * _display_scale()
+	pass_button.custom_minimum_size = Vector2(104 if _is_compact_view() else 150, 48 if _is_compact_view() else 56) * _display_scale()
 	pass_button.pressed.connect(_pass)
 	buttons_box.add_child(pass_button)
 	var exchange_button := Button.new()
 	exchange_button.name = "ExchangeButton"
 	exchange_button.text = "Return selected"
-	exchange_button.custom_minimum_size = Vector2(190, 48 if _is_compact_view() else 56) * _display_scale()
+	exchange_button.custom_minimum_size = Vector2(154 if _is_compact_view() else 190, 48 if _is_compact_view() else 56) * _display_scale()
 	exchange_button.pressed.connect(_submit_local_exchange)
 	exchange_button.hide()
 	buttons_box.add_child(exchange_button)
 	var menu := Button.new()
 	menu.text = "Menu"
-	menu.custom_minimum_size = Vector2(100, 48 if _is_compact_view() else 56) * _display_scale()
+	menu.custom_minimum_size = Vector2(88 if _is_compact_view() else 100, 48 if _is_compact_view() else 56) * _display_scale()
 	menu.pressed.connect(_return_to_main_menu)
 	buttons_box.add_child(menu)
+
+func _layout_round_status_panel() -> void:
+	if not is_instance_valid(title_label):
+		return
+	var panel := title_label.get_parent() as Control
+	if not is_instance_valid(panel):
+		return
+	var hud_scale := _display_scale()
+	panel.position = Vector2(16.0, 10.0) * hud_scale
+	panel.size = Vector2(get_viewport_rect().size.x * 0.36, 40.0 * hud_scale)
 
 func _refresh() -> void:
 	if state == null or not is_instance_valid(hand_box):
 		return
+	_layout_round_status_panel()
 	if local_phase == "results":
 		return
 	if state.finishing_order.size() == state.players.size():
