@@ -109,7 +109,7 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 			center_pile.queue_free()
 			center_pile = null
 		if not cards.is_empty():
-			center_pile = CardViewScript.make_pile(cards, compact_view, layout_scale)
+			center_pile = CardViewScript.make_pile(cards, compact_view, layout_scale * 1.45)
 			center_group.add_child(center_pile)
 			center_pile.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			if played_by >= 0 and played_by < players.size():
@@ -136,8 +136,9 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 		return
 	var source_global := seat_widgets[played_by].get_global_rect().get_center()
 	var source := play_flight_layer.get_global_transform().affine_inverse() * source_global
-	var card_width := (42.0 if compact_view else 58.0) * layout_scale
-	var card_height := (64.0 if compact_view else 92.0) * layout_scale
+	var flight_scale := layout_scale * 1.45
+	var card_width := (42.0 if compact_view else 58.0) * flight_scale
+	var card_height := (64.0 if compact_view else 92.0) * flight_scale
 	var pile_cards: Control = center_pile.get_child(0)
 	var stagger := 0.035
 	var sound_duration := CARD_FLIP_SOUND.get_length()
@@ -146,7 +147,7 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 	play_animation_tween.set_parallel(true)
 	for i in range(cards.size()):
 		var flight_card = CardViewScript.new()
-		flight_card.setup(cards[i], false, compact_view, layout_scale)
+		flight_card.setup(cards[i], false, compact_view, flight_scale)
 		flight_card.set_available(true)
 		flight_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		flight_card.size = Vector2(card_width, card_height)
@@ -346,7 +347,7 @@ static func normalized_seat_positions(player_count: int, compact: bool = false, 
 		return result
 	result.resize(count)
 	var local := posmod(local_index, count)
-	var radius := 0.40
+	var radius := 0.45
 	for player_index in range(count):
 		var visual_offset := posmod(player_index - local, count)
 		var angle := PI * 0.5 + TAU * float(visual_offset) / float(count)

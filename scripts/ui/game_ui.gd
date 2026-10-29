@@ -274,9 +274,13 @@ func _show_local_rps() -> void:
 	root.add_child(heading)
 	var held_cards := HBoxContainer.new()
 	held_cards.alignment = BoxContainer.ALIGNMENT_CENTER
-	held_cards.add_theme_constant_override("separation", roundi(36.0 * _display_scale()))
+	held_cards.custom_minimum_size.x = 320.0 * _display_scale()
+	held_cards.add_theme_constant_override("separation", 0)
 	root.add_child(held_cards)
 	for player_index in local_rps_players:
+		var spacer := Control.new()
+		spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		held_cards.add_child(spacer)
 		var holder := VBoxContainer.new()
 		holder.alignment = BoxContainer.ALIGNMENT_CENTER
 		held_cards.add_child(holder)
@@ -291,14 +295,20 @@ func _show_local_rps() -> void:
 		holder_label.text = "You" if player_index == 0 else str(state.players[player_index].name)
 		holder_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		holder.add_child(holder_label)
+	var trailing_spacer := Control.new()
+	trailing_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	held_cards.add_child(trailing_spacer)
 	var options := HBoxContainer.new()
 	options.alignment = BoxContainer.ALIGNMENT_CENTER
-	options.add_theme_constant_override("separation", roundi(12.0 * _display_scale()))
+	options.custom_minimum_size.x = 420.0 * _display_scale()
+	options.add_theme_constant_override("separation", 0)
 	root.add_child(options)
 	var choice_names := ["Rock", "Paper", "Scissors"]
 	for choice in range(choice_names.size()):
 		var column := VBoxContainer.new()
 		column.alignment = BoxContainer.ALIGNMENT_CENTER
+		column.custom_minimum_size.x = 140.0 * _display_scale()
+		column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		options.add_child(column)
 		var pick := TextureButton.new()
 		pick.texture_normal = TablePresentationScript.rps_texture(choice)
@@ -367,10 +377,14 @@ func _animate_local_rps_reveal(human_choice: int, bot_choice: int) -> VBoxContai
 	root.add_child(heading)
 	var cards := HBoxContainer.new()
 	cards.alignment = BoxContainer.ALIGNMENT_CENTER
-	cards.add_theme_constant_override("separation", roundi(36.0 * _display_scale()))
+	cards.custom_minimum_size.x = 320.0 * _display_scale()
+	cards.add_theme_constant_override("separation", 0)
 	root.add_child(cards)
 	var faces: Array[TextureRect] = []
 	for player_index in local_rps_players:
+		var spacer := Control.new()
+		spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cards.add_child(spacer)
 		var holder := VBoxContainer.new()
 		holder.alignment = BoxContainer.ALIGNMENT_CENTER
 		cards.add_child(holder)
@@ -387,6 +401,9 @@ func _animate_local_rps_reveal(human_choice: int, bot_choice: int) -> VBoxContai
 		label.text = "You" if player_index == 0 else str(state.players[player_index].name)
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		holder.add_child(label)
+	var trailing_spacer := Control.new()
+	trailing_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cards.add_child(trailing_spacer)
 	var first_choice := human_choice if local_rps_players[0] == 0 else bot_choice
 	var second_choice := bot_choice if local_rps_players[1] != 0 else human_choice
 	var tween := create_tween()
