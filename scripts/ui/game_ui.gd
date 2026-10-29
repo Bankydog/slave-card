@@ -463,7 +463,7 @@ func _build_table() -> void:
 	root.add_child(bottom_hud)
 	var scroll := ScrollContainer.new()
 	scroll.name = "LocalHandScroll"
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	bottom_hud.add_child(scroll)
 	var hand_center := CenterContainer.new()
 	hand_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -520,7 +520,8 @@ func _build_table() -> void:
 	leave.tooltip_text = "Leave"
 	leave.pressed.connect(_return_to_main_menu)
 	buttons_box.add_child(leave)
-	resized.connect(_layout_game_hud)
+	if not resized.is_connected(_layout_game_hud):
+		resized.connect(_layout_game_hud)
 	_layout_game_hud()
 
 func _layout_game_hud() -> void:
@@ -543,17 +544,18 @@ func _layout_game_hud() -> void:
 	bottom_hud_control.position = bottom_hud.position
 	bottom_hud_control.size = bottom_hud.size
 	var scroll := bottom_hud_control.get_node("LocalHandScroll") as ScrollContainer
-	var hand_height := minf((77.0 if _is_compact_view() else 109.0) * scale, bottom_hud.size.y - 8.0 * scale)
-	var action_width := 250.0 * scale
-	scroll.position = Vector2(24.0 * scale, maxf(0.0, (bottom_hud.size.y - hand_height) * 0.5))
-	scroll.size = Vector2(maxf(1.0, bottom_hud.size.x - action_width - 32.0 * scale), hand_height)
+	var hand_height := minf((132.0 if _is_compact_view() else 156.0) * scale, bottom_hud.size.y - 8.0 * scale)
+	var action_width := 450.0 * scale
+	scroll.position = Vector2(0.0, maxf(0.0, (bottom_hud.size.y - hand_height) * 0.5))
+	# Center the hand against the full viewport; the action row occupies the far right.
+	scroll.size = Vector2(bottom_hud.size.x, hand_height)
 	hand_box.add_theme_constant_override("separation", roundi(-29.0 * scale))
 	buttons_box.position = Vector2(bottom_hud.size.x - action_width - 12.0 * scale, 0.0)
 	buttons_box.size = Vector2(action_width, bottom_hud.size.y)
 	buttons_box.add_theme_constant_override("separation", roundi(8.0 * scale))
 	for button in buttons_box.get_children():
 		if button is BaseButton:
-			button.custom_minimum_size = Vector2(74.0, 74.0) * scale
+			button.custom_minimum_size = Vector2(118.0, 118.0) * scale
 
 func _refresh() -> void:
 	if state == null or not is_instance_valid(hand_box):

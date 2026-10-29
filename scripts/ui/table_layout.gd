@@ -1,9 +1,9 @@
 extends RefCounted
 
 const REFERENCE_SIZE := Vector2(1920.0, 1080.0)
-const TOP_HUD_REFERENCE := Rect2(0.0, 0.0, 1920.0, 80.0)
-const TABLE_REFERENCE := Rect2(530.0, 80.0, 860.0, 860.0)
-const BOTTOM_HUD_REFERENCE := Rect2(0.0, 940.0, 1920.0, 140.0)
+const TOP_HUD_REFERENCE := Rect2(0.0, 0.0, 1920.0, 96.0)
+const TABLE_REFERENCE := Rect2(560.0, 96.0, 800.0, 800.0)
+const BOTTOM_HUD_REFERENCE := Rect2(0.0, 896.0, 1920.0, 184.0)
 
 static func layout_for_viewport(viewport_size: Vector2) -> Dictionary:
 	var safe_width := maxf(1.0, viewport_size.x)
