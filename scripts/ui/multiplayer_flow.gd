@@ -125,9 +125,30 @@ func get_display_name() -> String:
 func _root_box(title_text: String) -> VBoxContainer:
 	_clear_screen()
 	var root := VBoxContainer.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	if page in ["main", "create", "join"]:
+		var center := CenterContainer.new()
+		center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(center)
+		var panel := PanelContainer.new()
+		panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var panel_style := StyleBoxFlat.new()
+		panel_style.bg_color = Color(0.96, 0.94, 0.88, 0.86)
+		panel_style.border_color = Color(0.24, 0.16, 0.10, 0.95)
+		panel_style.set_border_width_all(roundi(3.0 * _display_scale()))
+		panel_style.set_corner_radius_all(roundi(18.0 * _display_scale()))
+		panel_style.content_margin_left = 24.0 * _display_scale()
+		panel_style.content_margin_right = 24.0 * _display_scale()
+		panel_style.content_margin_top = 18.0 * _display_scale()
+		panel_style.content_margin_bottom = 18.0 * _display_scale()
+		panel.add_theme_stylebox_override("panel", panel_style)
+		center.add_child(panel)
+		panel.add_child(root)
+	else:
+		root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		add_child(root)
 	root.add_theme_constant_override("separation", roundi((4.0 if _is_compact_view() else 12.0) * _display_scale()))
-	add_child(root)
 	if not title_text.is_empty():
 		var heading := Label.new()
 		heading.text = title_text
@@ -260,6 +281,7 @@ func _show_create_room() -> void:
 		round_button.toggle_mode = true
 		round_button.button_pressed = round_limit == create_match_round_limit
 		round_button.custom_minimum_size = Vector2(64.0, 48.0) * _display_scale()
+		_style_round_choice(round_button, round_limit == create_match_round_limit)
 		round_button.pressed.connect(_select_create_match_round_limit.bind(round_limit))
 		rounds_row.add_child(round_button)
 	root.add_child(rounds_row)
@@ -267,6 +289,22 @@ func _show_create_room() -> void:
 	_action_button(root, "Back", _show_main_menu, 150)
 	_status(root)
 	_enforce_text_minimum(root)
+
+func _style_round_choice(button: Button, selected: bool) -> void:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.96, 0.94, 0.88) if selected else Color(0.12, 0.13, 0.16)
+	normal.border_color = Color(0.18, 0.14, 0.10) if selected else Color(0.78, 0.76, 0.68)
+	normal.set_border_width_all(2)
+	normal.set_corner_radius_all(8)
+	button.add_theme_stylebox_override("normal", normal)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(1.0, 0.98, 0.92) if selected else Color(0.24, 0.26, 0.30)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", normal.duplicate())
+	button.add_theme_stylebox_override("focus", normal.duplicate())
+	button.add_theme_color_override("font_color", Color(0.08, 0.07, 0.06) if selected else Color(0.96, 0.95, 0.90))
+	button.add_theme_color_override("font_hover_color", Color(0.08, 0.07, 0.06) if selected else Color.WHITE)
+	button.add_theme_color_override("font_pressed_color", Color(0.08, 0.07, 0.06))
 
 func _select_create_match_round_limit(round_limit: int) -> void:
 	if not MatchStateScript.ALLOWED_ROUND_LIMITS.has(round_limit):
@@ -948,6 +986,8 @@ func _enforce_node_text_minimum(node: Node) -> void:
 	if node is Label or node is Button or node is LineEdit:
 		var control := node as Control
 		control.add_theme_font_size_override("font_size", maxi(16, control.get_theme_font_size("font_size")))
+	if node is Label and page in ["main", "create", "join"]:
+		(node as Label).add_theme_color_override("font_color", Color(0.12, 0.09, 0.07))
 	for child in node.get_children():
 		_enforce_node_text_minimum(child)
 

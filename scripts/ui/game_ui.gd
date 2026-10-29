@@ -69,11 +69,33 @@ func _return_to_main_menu() -> void:
 
 func _build_menu() -> void:
 	_clear()
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(center)
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.96, 0.94, 0.88, 0.86)
+	panel_style.border_color = Color(0.24, 0.16, 0.10, 0.95)
+	panel_style.set_border_width_all(roundi(3.0 * _display_scale()))
+	panel_style.set_corner_radius_all(roundi(18.0 * _display_scale()))
+	panel_style.content_margin_left = 24.0 * _display_scale()
+	panel_style.content_margin_right = 24.0 * _display_scale()
+	panel_style.content_margin_top = 18.0 * _display_scale()
+	panel_style.content_margin_bottom = 18.0 * _display_scale()
+	panel.add_theme_stylebox_override("panel", panel_style)
+	center.add_child(panel)
 	var root := VBoxContainer.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("separation", roundi(18.0 * _display_scale()))
+	root.add_theme_constant_override("separation", roundi(12.0 * _display_scale()))
 	root.alignment = BoxContainer.ALIGNMENT_CENTER
-	add_child(root)
+	panel.add_child(root)
+	var heading := Label.new()
+	heading.text = "Single Player"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", roundi(26.0 * _display_scale()))
+	root.add_child(heading)
 	var count_row := HBoxContainer.new()
 	count_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	root.add_child(count_row)
@@ -112,6 +134,7 @@ func _build_menu() -> void:
 		round_button.toggle_mode = true
 		round_button.button_pressed = round_limit == selected_match_round_limit
 		round_button.custom_minimum_size = Vector2(64.0, 48.0) * _display_scale()
+		_style_round_choice(round_button, round_limit == selected_match_round_limit)
 		round_button.pressed.connect(_select_match_round_limit.bind(round_limit))
 		match_row.add_child(round_button)
 	root.add_child(match_row)
@@ -129,6 +152,29 @@ func _build_menu() -> void:
 	root.add_child(back)
 	_update_menu_count(count_value)
 	_enforce_text_minimum(root)
+	_style_menu_labels(root)
+
+func _style_menu_labels(node: Node) -> void:
+	if node is Label:
+		(node as Label).add_theme_color_override("font_color", Color(0.12, 0.09, 0.07))
+	for child in node.get_children():
+		_style_menu_labels(child)
+
+func _style_round_choice(button: Button, selected: bool) -> void:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.96, 0.94, 0.88) if selected else Color(0.12, 0.13, 0.16)
+	normal.border_color = Color(0.18, 0.14, 0.10) if selected else Color(0.78, 0.76, 0.68)
+	normal.set_border_width_all(2)
+	normal.set_corner_radius_all(8)
+	button.add_theme_stylebox_override("normal", normal)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(1.0, 0.98, 0.92) if selected else Color(0.24, 0.26, 0.30)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", normal.duplicate())
+	button.add_theme_stylebox_override("focus", normal.duplicate())
+	button.add_theme_color_override("font_color", Color(0.08, 0.07, 0.06) if selected else Color(0.96, 0.95, 0.90))
+	button.add_theme_color_override("font_hover_color", Color(0.08, 0.07, 0.06) if selected else Color.WHITE)
+	button.add_theme_color_override("font_pressed_color", Color(0.08, 0.07, 0.06))
 
 func _select_match_round_limit(round_limit: int) -> void:
 	if not MatchStateScript.ALLOWED_ROUND_LIMITS.has(round_limit):
@@ -666,6 +712,7 @@ func set_game_background(players: int) -> void:
 	if not is_instance_valid(table_background):
 		return
 	table_background.texture = TABLE_FOUR_TEXTURE if players >= 2 and players <= 4 else TABLE_MANY_TEXTURE
+	table_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	table_background.visible = true
 
 func set_title_screen_enabled(enabled: bool) -> void:
@@ -673,6 +720,9 @@ func set_title_screen_enabled(enabled: bool) -> void:
 		return
 	if enabled:
 		table_background.texture = TITLE_TEXTURE
+		table_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	else:
+		table_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	table_background.visible = enabled
 
 func _display_scale() -> float:
