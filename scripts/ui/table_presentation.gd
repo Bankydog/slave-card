@@ -268,6 +268,8 @@ func _layout_seats() -> void:
 	var global_origin := global_position
 	if is_instance_valid(center_layer):
 		var center_offset_y := viewport_size.y * 0.5 - global_origin.y - size.y * 0.5
+		if count <= 4:
+			center_offset_y -= viewport_size.y * 0.04
 		center_layer.offset_top = center_offset_y
 		center_layer.offset_bottom = center_offset_y
 	var seat_width := (112.0 if compact_view else 144.0) * layout_scale if count == 4 else (112.0 if compact_view else 152.0) * layout_scale
@@ -299,7 +301,7 @@ static func normalized_seat_positions(player_count: int, compact: bool = false, 
 	result[0] = Vector2(0.5, 0.86)
 	var opponents := count - 1
 	if count >= 2 and count <= 4:
-		var chair_positions: Array[Vector2] = [Vector2(0.5, 0.88), Vector2(0.1, 0.52), Vector2(0.5, 0.18), Vector2(0.9, 0.52)]
+		var chair_positions: Array[Vector2] = [Vector2(0.5, 0.88), Vector2(0.1, 0.47), Vector2(0.5, 0.12), Vector2(0.9, 0.47)]
 		var normalized_local_index := posmod(local_index, count)
 		for i in range(count):
 			var seat_offset := posmod(i - normalized_local_index, count)
