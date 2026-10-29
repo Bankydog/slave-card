@@ -57,6 +57,9 @@ var exchange_mandatory_ids: Array[String] = []
 var exchange_readiness: Dictionary = {}
 var exchange_participant := false
 var pending_request: Dictionary = {}
+var request_in_flight := false
+var request_type_in_flight := ""
+var request_timeout_timer: Timer
 var status_text := ""
 
 var name_input: LineEdit
@@ -73,6 +76,12 @@ func _ready() -> void:
 	add_child(endpoint)
 	endpoint.message_received.connect(_on_server_message)
 	endpoint.connection_status_changed.connect(_on_connection_status)
+	request_timeout_timer = Timer.new()
+	request_timeout_timer.name = "RequestTimeout"
+	request_timeout_timer.one_shot = true
+	request_timeout_timer.wait_time = 15.0
+	request_timeout_timer.timeout.connect(_on_request_timeout)
+	add_child(request_timeout_timer)
 	var profile := ConfigFile.new()
 	if profile.load(PROFILE_PATH) == OK:
 		guest_name = str(profile.get_value("profile", "display_name", "Guest"))
@@ -275,9 +284,11 @@ func _status(parent: Control) -> void:
 		status_label = null
 		return
 	status_label = Label.new()
+	status_label.name = "NetworkStatus"
 	status_label.text = status_text
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status_label.add_theme_color_override("font_color", Color("#8a5a00") if request_in_flight else Color("#a52a2a"))
 	parent.add_child(status_label)
 
 func _show_main_menu() -> void:
@@ -301,7 +312,6 @@ func _show_main_menu() -> void:
 
 func _show_create_room() -> void:
 	page = "create"
-	status_text = ""
 	var root := _root_box("Create Room")
 	root.alignment = BoxContainer.ALIGNMENT_CENTER
 	var row := HBoxContainer.new()
@@ -341,7 +351,8 @@ func _show_create_room() -> void:
 		round_button.pressed.connect(_select_create_match_round_limit.bind(round_limit))
 		rounds_row.add_child(round_button)
 	root.add_child(rounds_row)
-	_action_button(root, "Create Room", func(): _send_request(Protocol.CREATE_ROOM, {"name": _effective_guest_name(), "max_players": room_max_players, "match_round_limit": create_match_round_limit}))
+	var create_button := _action_button(root, "Create Room", func(): _send_request(Protocol.CREATE_ROOM, {"name": _effective_guest_name(), "max_players": room_max_players, "match_round_limit": create_match_round_limit}))
+	create_button.disabled = request_in_flight
 	_action_button(root, "Back", _show_main_menu, 150)
 	_status(root)
 	_enforce_text_minimum(root)
@@ -370,12 +381,12 @@ func _select_create_match_round_limit(round_limit: int) -> void:
 
 func _show_join_room() -> void:
 	page = "join"
-	status_text = ""
 	var root := _root_box("Join Room")
 	root.alignment = BoxContainer.ALIGNMENT_CENTER
 	_labeled_line_edit(root, "Name", guest_name, "Guest name", _set_guest_name)
 	room_code_input = _line_edit(root, room_code, "6-character room code", _set_room_code)
-	_action_button(root, "Join Room", func(): _send_request(Protocol.JOIN_ROOM, {"name": _effective_guest_name(), "room_code": room_code.to_upper()}))
+	var join_button := _action_button(root, "Join Room", func(): _send_request(Protocol.JOIN_ROOM, {"name": _effective_guest_name(), "room_code": room_code.to_upper()}))
+	join_button.disabled = request_in_flight
 	_action_button(root, "Back", _show_main_menu, 150)
 	_status(root)
 	_enforce_text_minimum(root)
@@ -482,16 +493,24 @@ func _show_lobby() -> void:
 	ready_summary.text = "Ready %d / %d" % [lobby_ready_count, lobby_human_count]
 	ready_summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(ready_summary)
+	var readiness_hint := Label.new()
+	readiness_hint.name = "LobbyReadinessHint"
+	readiness_hint.text = "Everyone is Ready. The host can start." if lobby_all_ready else "Every human player, including the host, must press Ready before starting."
+	readiness_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	readiness_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	readiness_hint.add_theme_color_override("font_color", Color("#555555"))
+	root.add_child(readiness_hint)
 	var local_ready := local_player_index >= 0 and local_player_index < room_players.size() and bool(room_players[local_player_index].get("ready", false))
 	var ready_button := _action_button(root, "Cancel Ready" if local_ready else "Ready", func(): _send_request(Protocol.SET_READY, {"ready": not local_ready}))
 	ready_button.name = "Action_Ready"
+	ready_button.disabled = request_in_flight
 	if is_host:
 		var fill_bots := CheckBox.new()
 		fill_bots.text = "Fill empty seats with bots"
 		fill_bots.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		root.add_child(fill_bots)
 		var start_button := _action_button(root, "Start Game", func(): _send_request(Protocol.START_GAME, {"fill_bots": fill_bots.button_pressed}))
-		start_button.disabled = not lobby_all_ready
+		start_button.disabled = request_in_flight or not lobby_all_ready
 	else:
 		var waiting := Label.new()
 		waiting.text = "Waiting for the host to start"
@@ -1052,30 +1071,93 @@ func _show_final_match_result(payload: Dictionary) -> void:
 	_enforce_text_minimum(root)
 
 func _send_request(message_type: String, payload: Dictionary) -> void:
-	status_text = "Connecting to room server…"
-	if endpoint.connected:
-		endpoint.send_intent(message_type, payload)
+	if request_in_flight:
 		return
+	request_in_flight = true
+	request_type_in_flight = message_type
+	status_text = _request_status_text(message_type, not endpoint.connected)
+	request_timeout_timer.start()
 	pending_request = {"type": message_type, "payload": payload.duplicate(true)}
+	_refresh_current_page()
+	if endpoint.connected:
+		if endpoint.send_intent(message_type, payload):
+			pending_request.clear()
+		else:
+			_finish_request("Could not send the request. Check your connection and try again.")
+		return
 	var error: Error = endpoint.connect_to_server(server_url.strip_edges())
 	if error != OK:
-		status_text = "Could not start the WebSocket connection."
-		_refresh_current_page()
+		_finish_request("Could not connect to the room server. Check your connection and try again.")
+
+func _request_status_text(message_type: String, connecting: bool) -> String:
+	if connecting:
+		return "Connecting to room server…"
+	match message_type:
+		Protocol.CREATE_ROOM: return "Creating room…"
+		Protocol.JOIN_ROOM: return "Joining room…"
+		Protocol.SET_READY: return "Updating Ready status…"
+		Protocol.START_GAME: return "Starting game…"
+		_: return "Sending request…"
+
+func _request_has_response(message_type: String, request_type: String) -> bool:
+	if message_type == Protocol.ACTION_REJECTED:
+		return true
+	match request_type:
+		Protocol.CREATE_ROOM: return message_type == Protocol.ROOM_CREATED
+		Protocol.JOIN_ROOM, Protocol.SET_READY, Protocol.REQUEST_SEAT_SWAP, Protocol.RESPOND_SEAT_SWAP, Protocol.REMATCH:
+			return message_type in [Protocol.LOBBY_STATE, Protocol.SEAT_SWAP_RESULT]
+		Protocol.START_GAME, Protocol.START_NEXT_ROUND, Protocol.CONTINUE_RPS:
+			return message_type in [Protocol.START_GAME, Protocol.DEAL, Protocol.RPS_STATE]
+		Protocol.PLAY_CARDS, Protocol.PASS:
+			return message_type in [Protocol.TURN_CHANGED, Protocol.ROUND_FINISHED, Protocol.MATCH_FINISHED, Protocol.PLAYER_FINISHED]
+		Protocol.SELECT_CARDS: return message_type in [Protocol.CARD_EXCHANGE, Protocol.TURN_CHANGED]
+		Protocol.SELECT_RPS: return message_type == Protocol.RPS_STATE
+	return false
+
+func _finish_request(message: String = "") -> void:
+	if request_timeout_timer != null:
+		request_timeout_timer.stop()
+	request_in_flight = false
+	request_type_in_flight = ""
+	pending_request.clear()
+	status_text = message
+	_refresh_current_page()
+
+func _on_request_timeout() -> void:
+	if request_in_flight:
+		_finish_request("No response from the room server. Check your connection and retry.")
 
 func _on_connection_status(connected: bool, reason: String) -> void:
 	if connected:
-		status_text = ""
 		if not pending_request.is_empty():
-			endpoint.send_intent(str(pending_request.type), pending_request.payload)
-			pending_request.clear()
+			var request_type := str(pending_request.type)
+			if not endpoint.send_intent(request_type, pending_request.payload):
+				_finish_request("Could not send the request. Check your connection and try again.")
+			else:
+				status_text = _request_status_text(request_type, false)
+				_refresh_current_page()
 	else:
-		status_text = reason
-		_refresh_current_page()
+		if request_in_flight:
+			_finish_request(reason if not reason.is_empty() else "Disconnected from the room server.")
+		else:
+			status_text = reason
+			_refresh_current_page()
 
 func _on_server_message(message: Dictionary) -> void:
 	var message_type := str(message.get("type", ""))
 	var payload: Dictionary = message.get("payload", {})
-	if message_type != Protocol.ACTION_REJECTED:
+	if request_in_flight and _request_has_response(message_type, request_type_in_flight):
+		if message_type == Protocol.ACTION_REJECTED:
+			request_timeout_timer.stop()
+			request_in_flight = false
+			request_type_in_flight = ""
+			pending_request.clear()
+		else:
+			request_in_flight = false
+			request_type_in_flight = ""
+			pending_request.clear()
+			request_timeout_timer.stop()
+	if not request_in_flight and message_type != Protocol.ACTION_REJECTED:
 		status_text = ""
 	match message_type:
 		Protocol.ROOM_CREATED:
