@@ -26,6 +26,7 @@ func _ready() -> void:
 	_test_trade_waiting_ui()
 	_test_server_trade_authority()
 	_test_turn_flow()
+	_test_local_combo_flow()
 	_test_round_starter()
 	_test_pass_regressions()
 	_test_bot_pass_turn_regression()
@@ -53,6 +54,7 @@ func _ready() -> void:
 	_test_server_single_against_multi_card_server_validation()
 	_test_server_suit_validation()
 	_test_server_parity_validation()
+	_test_server_cross_type_combo()
 	if failures.is_empty():
 		print("VALIDATION PASS")
 		await get_tree().create_timer(3.0).timeout
@@ -523,6 +525,24 @@ func _test_turn_flow() -> void:
 	game.passed[3] = true
 	_check(game.pass_turn(0) and game.current_player == 3 and game.current_cards.is_empty(), "finished last player is skipped when a trick resets")
 
+func _test_local_combo_flow() -> void:
+	var straight_game = GameStateScript.new()
+	straight_game.start(2, 109, 0)
+	var straight: Array = [_card("4", "Clubs"), _card("5", "Diamonds"), _card("6", "Hearts"), _card("7", "Spades"), _card("8", "Clubs")]
+	straight_game.players[0].hand = straight + [_card("Q", "Diamonds")]
+	straight_game.players[1].hand = [_card("9", "Clubs"), _card("9", "Hearts")]
+	_check(straight_game.play_cards(0, straight) and straight_game.current_combination.type == "Straight" and straight_game.current_player == 1, "local game accepts a five-card Straight lead and advances turn")
+	_check(not straight_game.play_cards(1, straight_game.players[1].hand) and straight_game.current_player == 1, "local game rejects an even-family Pair against an odd-family Straight")
+	_check(straight_game.pass_turn(1) and straight_game.current_cards.is_empty() and straight_game.current_player == 0, "passing resets the local trick to its Straight leader")
+	var switch_game = GameStateScript.new()
+	switch_game.start(2, 110, 0)
+	switch_game.players[0].hand = [_card("6", "Clubs"), _card("Q", "Hearts")]
+	var triple: Array = [_card("7", "Clubs"), _card("7", "Diamonds"), _card("7", "Hearts")]
+	switch_game.players[1].hand = triple + [_card("K", "Spades")]
+	_check(switch_game.play_card(0, switch_game.players[0].hand[0]) and switch_game.current_player == 1, "local game begins a Single trick and advances turn")
+	_check(switch_game.play_cards(1, triple) and switch_game.current_combination.type == "Triple" and switch_game.current_player == 0, "local game accepts a legal Triple response to a Single")
+	_check(switch_game.pass_turn(0) and switch_game.current_cards.is_empty() and switch_game.current_player == 1, "pass after a cross-type response resets to the last player")
+
 func _test_round_starter() -> void:
 	var game = GameStateScript.new()
 	game.start(4, 11, 2)
@@ -580,38 +600,59 @@ func _test_combinations() -> void:
 	_check(rules.classify([_card("9"), _card("9", "Hearts")]).type == "Pair", "recognizes Pair")
 	_check(rules.classify([_card("9"), _card("9", "Hearts"), _card("9", "Spades")]).type == "Triple", "recognizes Triple")
 	_check(rules.classify([_card("9"), _card("9", "Hearts"), _card("9", "Spades"), _card("9", "Diamonds")]).type == "Four of a Kind", "recognizes Four of a Kind")
-	_check(rules.classify([_card("9"), _card("10"), _card("J")]).type == "Straight", "recognizes Straight")
+	_check(rules.classify([_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Hearts"), _card("8", "Spades"), _card("9", "Clubs")]).type == "Straight", "recognizes mixed-suit five-card Straight")
+	_check(rules.classify([_card("5", "Spades"), _card("6", "Spades"), _card("7", "Spades"), _card("8", "Spades"), _card("9", "Spades")]).type == "Straight Flush", "recognizes Straight Flush before ordinary Straight")
 	_check(not rules.classify([]).valid and not rules.classify([_card("9"), _card("10")]).valid, "rejects empty and wrong-count plays")
 	_check(not rules.classify([_card("9"), _card("9", "Hearts"), _card("10")]).valid, "rejects mixed-rank invalid combination")
-	_check(not rules.classify([_card("9"), _card("J"), _card("Q")]).valid, "rejects nonconsecutive Straight")
-	_check(not rules.classify([_card("A"), _card("2"), _card("3")]).valid, "Straight does not wrap rank order")
+	_check(not rules.classify([_card("5"), _card("6"), _card("8"), _card("9"), _card("10")]).valid, "rejects nonconsecutive Straight")
+	_check(not rules.classify([_card("A"), _card("2"), _card("3"), _card("4"), _card("5")]).valid, "Straight does not wrap rank order")
 	_check(rules.can_beat([_card("10")], [_card("9")]), "higher Single beats lower Single")
 	_check(rules.can_beat([_card("10"), _card("10", "Hearts")], [_card("9"), _card("9", "Hearts")]), "higher Pair beats lower Pair")
 	_check(rules.can_beat([_card("10"), _card("10", "Hearts"), _card("10", "Spades")], [_card("9"), _card("9", "Hearts"), _card("9", "Spades")]), "higher Triple beats lower Triple")
 	_check(rules.can_beat([_card("10"), _card("10", "Hearts"), _card("10", "Spades"), _card("10", "Diamonds")], [_card("9"), _card("9", "Hearts"), _card("9", "Spades"), _card("9", "Diamonds")]), "higher Four beats lower Four")
-	_check(rules.can_beat([_card("10"), _card("J"), _card("Q")], [_card("9"), _card("10", "Hearts"), _card("J", "Spades")]), "higher equal-length Straight beats lower Straight")
+	_check(rules.can_beat([_card("6"), _card("7"), _card("8"), _card("9"), _card("10")], [_card("5"), _card("6", "Hearts"), _card("7", "Spades"), _card("8"), _card("9")]), "higher Straight beats lower Straight")
 	_check(not rules.can_beat([_card("9"), _card("9", "Hearts")], [_card("9", "Spades"), _card("9", "Diamonds")]), "rejects equal rank")
 	_check(not rules.can_beat([_card("8")], [_card("9")]), "rejects lower rank")
 	_check(not rules.can_beat([_card("4"), _card("4", "Hearts"), _card("4", "Spades")], [_card("8"), _card("8", "Hearts")]), "Pair cannot be answered by a Triple")
-	_check(rules.can_beat([_card("9"), _card("10"), _card("J")], [_card("8"), _card("8", "Hearts"), _card("8", "Spades")]), "higher Straight can answer a Triple")
+	_check(rules.can_beat([_card("5"), _card("6"), _card("7"), _card("8"), _card("9")], [_card("8"), _card("8", "Hearts"), _card("8", "Spades")]), "Straight can answer a Triple in the odd family")
 	_check(not rules.can_beat([_card("8")], [_card("7"), _card("7", "Hearts"), _card("7", "Spades")]), "Triple cannot be answered by a Single")
 	_check(not rules.can_beat([_card("8"), _card("8", "Hearts")], [_card("7"), _card("7", "Hearts"), _card("7", "Spades")]), "Triple cannot be answered by a Pair")
-	_check(not rules.can_beat([_card("4")], [_card("3"), _card("4"), _card("5")]), "three-card Straight cannot be answered by a Single")
-	_check(not rules.can_beat([_card("5"), _card("6"), _card("7"), _card("8")], [_card("3"), _card("4"), _card("5")]), "four-card even Straight cannot answer an odd-count Straight")
-	_check(rules.can_beat([_card("5"), _card("6"), _card("7"), _card("8"), _card("9")], [_card("3"), _card("4"), _card("5")]), "higher odd-count five-card Straight can answer a three-card Straight")
-	_check(rules.can_beat([_card("5"), _card("5", "Hearts"), _card("5", "Spades")], [_card("3"), _card("4"), _card("5")]), "Triple 555 beats Straight 345")
-	_check(not rules.can_beat([_card("4"), _card("4", "Hearts"), _card("4", "Spades")], [_card("3"), _card("4"), _card("5")]), "lower Triple cannot beat Straight 345")
+	_check(not rules.classify([_card("3"), _card("4"), _card("5")]).valid, "rejects three-card Straight")
+	_check(not rules.classify([_card("3"), _card("4"), _card("5"), _card("6")]).valid, "rejects four-card Straight")
+	_check(not rules.classify([_card("5", "Clubs"), _card("6", "Clubs"), _card("7", "Clubs")]).valid, "rejects three-card Straight Flush")
+	_check(not rules.classify([_card("5", "Clubs"), _card("6", "Clubs"), _card("7", "Clubs"), _card("8", "Clubs")]).valid, "rejects four-card Straight Flush")
+	_check(rules.can_beat([_card("5"), _card("6"), _card("7"), _card("8"), _card("9")], [_card("3"), _card("3", "Hearts"), _card("3", "Spades")]), "Straight can answer a Triple")
+	_check(not rules.can_beat([_card("5"), _card("5", "Hearts"), _card("5", "Spades")], [_card("3"), _card("4"), _card("5"), _card("6"), _card("7")]), "three-card Triple does not outrank the existing five-card Straight tier")
 	_check(rules.can_beat([_card("8"), _card("8", "Hearts"), _card("8", "Spades")], [_card("7"), _card("7", "Hearts"), _card("7", "Spades")]), "higher Triple beats lower Triple")
-	_check(rules.can_beat([_card("5"), _card("6"), _card("7")], [_card("4"), _card("5"), _card("6")]), "higher same-length Straight beats lower Straight")
+	_check(rules.can_beat([_card("6"), _card("7"), _card("8"), _card("9"), _card("10")], [_card("5"), _card("6"), _card("7"), _card("8"), _card("9")]), "higher five-card Straight beats lower Straight")
 	_check(not rules.can_beat([_card("5"), _card("5", "Hearts")], [_card("3")]), "Pair cannot be answered by a Single because even and odd counts cannot mix")
 	_check(not rules.can_beat([_card("3")], [_card("5"), _card("5", "Hearts")]), "Single cannot be answered by a Pair because odd and even counts cannot mix")
 	_check(not rules.can_beat([_card("8"), _card("8", "Hearts")], [_card("J"), _card("J", "Hearts")]), "same-type lower Pair is rejected")
 	_check(not rules.can_beat([_card("9"), _card("9", "Hearts")], [_card("9", "Spades"), _card("9", "Hearts")]), "same-type equal-strength Pair is rejected")
 	_check(not rules.can_beat([_card("9"), _card("9", "Hearts")], [_card("8")]), "Single cannot be answered by a Pair")
-	_check(not rules.can_beat([_card("9"), _card("10"), _card("J"), _card("Q")], [_card("8"), _card("9", "Hearts"), _card("10", "Spades")]), "rejects Straight with different length")
+	_check(not rules.can_beat([_card("9"), _card("10"), _card("J"), _card("Q")], [_card("8"), _card("9", "Hearts"), _card("10", "Spades"), _card("J"), _card("Q")]), "rejects four-card plays against a Straight")
+	_check(rules.can_beat([_card("3")], [],), "a new trick accepts a Single lead")
+	_check(rules.can_beat([_card("3"), _card("3", "Hearts")], [],), "a new trick accepts a Pair lead")
+	_check(rules.can_beat([_card("3"), _card("3", "Hearts"), _card("3", "Spades")], [],), "a new trick accepts a Triple lead")
+	_check(rules.can_beat([_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Hearts"), _card("8", "Spades"), _card("9", "Clubs")], []), "a new trick accepts a Straight lead")
+	_check(rules.can_beat([_card("5", "Hearts"), _card("6", "Hearts"), _card("7", "Hearts"), _card("8", "Hearts"), _card("9", "Hearts")], []), "a new trick accepts a Straight Flush lead")
+	_check(not rules.can_beat([_card("3"), _card("3", "Hearts")], [_card("3")]), "Single cannot be answered by Pair")
+	_check(not rules.can_beat([_card("4"), _card("4", "Hearts"), _card("4", "Spades")], [_card("3"), _card("3", "Hearts")]), "Pair cannot be answered by Triple")
+	_check(rules.can_beat([_card("4"), _card("4", "Hearts"), _card("4", "Spades")], [_card("3")]), "Single can be answered by a stronger Triple in the odd family")
+	_check(rules.can_beat([_card("4", "Clubs"), _card("4", "Diamonds"), _card("4", "Hearts"), _card("4", "Spades")], [_card("3"), _card("3", "Hearts")]), "Pair can be answered by a stronger Four in the even family")
+	_check(rules.can_beat([_card("5", "Clubs"), _card("6", "Clubs"), _card("7", "Clubs"), _card("8", "Clubs"), _card("9", "Clubs")], [_card("10", "Clubs"), _card("J", "Diamonds"), _card("Q", "Hearts"), _card("K", "Spades"), _card("A", "Clubs")]), "Straight Flush beats higher-ranked ordinary Straight")
+	_check(not rules.can_beat([_card("10", "Clubs"), _card("J", "Diamonds"), _card("Q", "Hearts"), _card("K", "Spades"), _card("A", "Clubs")], [_card("5", "Clubs"), _card("6", "Clubs"), _card("7", "Clubs"), _card("8", "Clubs"), _card("9", "Clubs")]), "ordinary Straight cannot beat Straight Flush")
+	var generated_flush_plays: Array = rules.list_legal_combinations([_card("5", "Clubs"), _card("6", "Clubs"), _card("7", "Clubs"), _card("8", "Clubs"), _card("9", "Clubs")])
+	var generated_straight_flush := false
+	for generated_play: Array in generated_flush_plays:
+		var generated_type: String = str(rules.classify(generated_play).type)
+		if generated_type == "Straight Flush":
+			generated_straight_flush = true
+		_check(generated_play.size() != 3 and generated_play.size() != 4, "move generation never emits three- or four-card pseudo-Straights")
+	_check(generated_straight_flush, "lead move generation includes Straight Flush")
 	var configurable = GameRulesScript.new()
 	configurable.straight_allow_two = false
-	_check(not configurable.classify([_card("Q"), _card("K"), _card("A"), _card("2")]).valid, "straight configuration can exclude Two")
+	_check(not configurable.classify([_card("J"), _card("Q"), _card("K"), _card("A"), _card("2")]).valid, "straight configuration can exclude Two")
 
 func _test_suit_comparisons() -> void:
 	var rules = GameRulesScript.new()
@@ -638,15 +679,22 @@ func _test_suit_comparisons() -> void:
 	var four_winner: Array = [_card("8", "Spades", 1), _card("8", "Hearts"), _card("8", "Diamonds"), _card("8", "Clubs", 1)]
 	_check(rules.can_beat(four_winner, four_center), "equal-rank Four of a Kind compares the complete suit sequence")
 	_check(not rules.can_beat(four_center.duplicate(), four_center), "identical Four of a Kind suit composition does not win")
-	var straight_top_center: Array = [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Hearts")]
-	var straight_top_winner: Array = [_card("5", "Diamonds"), _card("6", "Clubs"), _card("7", "Spades")]
+	var straight_top_center: Array = [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Hearts"), _card("8", "Clubs"), _card("9", "Clubs")]
+	var straight_top_winner: Array = [_card("5", "Diamonds"), _card("6", "Clubs"), _card("7", "Spades"), _card("8", "Diamonds"), _card("9", "Spades")]
 	_check(rules.can_beat(straight_top_winner, straight_top_center), "equal-top-rank Straight uses the highest card suit")
-	var straight_lower_center: Array = [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Spades")]
-	var straight_lower_play: Array = [_card("5", "Hearts"), _card("6", "Clubs"), _card("7", "Spades", 1)]
-	_check(rules.can_beat(straight_lower_play, straight_lower_center), "Straight wins when at least one corresponding suit is higher")
-	var straight_equal_decks: Array = [_card("5", "Clubs", 1), _card("6", "Diamonds", 1), _card("7", "Spades", 1)]
-	_check(not rules.can_beat(straight_equal_decks, [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Spades")]), "identical Straight rank and suit sequence across decks is equal")
-	_check(not rules.can_beat([_card("5"), _card("6"), _card("7"), _card("8")], straight_lower_center), "Straight suit tie-break still requires the same card count")
+	var straight_lower_center: Array = [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Hearts"), _card("8", "Clubs"), _card("9", "Spades")]
+	var straight_lower_play: Array = [_card("5", "Hearts"), _card("6", "Clubs"), _card("7", "Spades", 1), _card("8", "Spades"), _card("9", "Hearts")]
+	_check(not rules.can_beat(straight_lower_play, straight_lower_center), "Straight tie-break uses only the highest card suit")
+	var straight_equal_decks: Array = [_card("5", "Clubs", 1), _card("6", "Diamonds", 1), _card("7", "Spades", 1), _card("8", "Hearts", 1), _card("9", "Spades", 1)]
+	_check(not rules.can_beat(straight_equal_decks, [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Spades"), _card("8", "Hearts"), _card("9", "Spades")]), "identical Straight rank and suit sequence across decks is equal")
+	_check(not rules.classify([_card("5"), _card("6"), _card("7"), _card("8")]).valid, "four-card sequence is not a Straight")
+	var straight_flush_low: Array = [_card("5", "Clubs"), _card("6", "Clubs"), _card("7", "Clubs"), _card("8", "Clubs"), _card("9", "Clubs")]
+	var straight_flush_high: Array = [_card("6", "Clubs"), _card("7", "Clubs"), _card("8", "Clubs"), _card("9", "Clubs"), _card("10", "Clubs")]
+	_check(rules.classify(straight_flush_low).type == "Straight Flush" and rules.can_beat(straight_flush_high, straight_flush_low), "Straight Flush is explicit and higher sequence wins")
+	var straight_flush_duplicate_deck: Array = [_card("5", "Clubs", 1), _card("6", "Clubs", 1), _card("7", "Clubs", 1), _card("8", "Clubs", 1), _card("9", "Clubs", 1)]
+	_check(not rules.can_beat(straight_flush_duplicate_deck, straight_flush_low), "identical duplicate-deck Straight Flush is equal")
+	var straight_flush_other_suit: Array = [_card("5", "Spades"), _card("6", "Spades"), _card("7", "Spades"), _card("8", "Spades"), _card("9", "Spades")]
+	_check(rules.can_beat(straight_flush_other_suit, straight_flush_low), "equal-rank Straight Flush uses Clubs < Diamonds < Hearts < Spades")
 	_check(rules.compare_combinations(pair_winner, pair_center) > 0 and rules.compare_combinations(pair_center, pair_winner) < 0, "shared combination comparator returns consistent ordering")
 	_check(rules.list_legal_combinations_for_type([_card("3", "Diamonds"), _card("3", "Hearts")], [_card("3", "Clubs")], GameRulesScript.TYPE_SINGLE).size() == 2, "type-filtered legal-combination API supports future hints")
 
@@ -661,9 +709,9 @@ func _test_suit_selection_helpers() -> void:
 	var triple_hand: Array = [_card("7", "Spades", 1), _card("7", "Hearts", 1), _card("7", "Clubs", 1)]
 	var triple_selectable: Dictionary = rules.selectable_card_ids(triple_hand, [_card("7", "Spades"), _card("7", "Diamonds"), _card("7", "Clubs")], [])
 	_check(triple_selectable.size() == 3, "Triple helper recognizes a legal equal-rank suit-sequence win")
-	var straight_hand: Array = [_card("5", "Clubs", 1), _card("6", "Clubs"), _card("6", "Hearts"), _card("7", "Spades", 1)]
-	var straight_selectable: Dictionary = rules.selectable_card_ids(straight_hand, [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Spades")], [])
-	_check(straight_selectable.size() == 3 and not straight_selectable.has(_card("6", "Clubs").card_id()), "Straight assistance enables only cards in higher same-length Straights")
+	var straight_hand: Array = [_card("5", "Clubs", 1), _card("6", "Clubs"), _card("6", "Hearts"), _card("7", "Spades", 1), _card("8", "Diamonds"), _card("9", "Hearts")]
+	var straight_selectable: Dictionary = rules.selectable_card_ids(straight_hand, [_card("4"), _card("5", "Diamonds"), _card("6", "Hearts"), _card("7", "Spades"), _card("8")], [])
+	_check(straight_selectable.has(_card("5", "Clubs", 1).card_id()) and straight_selectable.has(_card("9", "Hearts").card_id()), "Straight assistance includes cards in a legal five-card response")
 	var four_hand: Array = [_card("8", "Spades", 1), _card("8", "Hearts"), _card("8", "Diamonds"), _card("8", "Clubs", 1)]
 	var four_selectable: Dictionary = rules.selectable_card_ids(four_hand, [_card("8", "Spades"), _card("8", "Diamonds"), _card("8", "Diamonds", 1), _card("8", "Clubs")], [])
 	_check(four_selectable.size() == 4, "Four of a Kind helper uses suit-sequence comparison")
@@ -681,20 +729,20 @@ func _test_selection_helpers() -> void:
 	_check(triples.has(_card("Q").card_id()) and triples.has(_card("Q", "Hearts").card_id()), "Triple assist finds higher rank cards")
 	var fours: Dictionary = rules.selectable_card_ids(hand, [_card("9"), _card("9", "Diamonds"), _card("9", "Spades"), _card("9", "Hearts")], [])
 	_check(fours.has(_card("K").card_id()) and fours.has(_card("K", "Diamonds").card_id()), "Four assist finds higher rank cards")
-	var straights: Dictionary = rules.selectable_card_ids(hand, [_card("7"), _card("8", "Hearts"), _card("9", "Diamonds")], [])
-	_check(straights.has(_card("8").card_id()) and straights.has(_card("10").card_id()), "Straight assist finds cards in higher equal-length sequences")
-	var odd_switch_hand: Array = [_card("4"), _card("5"), _card("6")]
+	var straights: Dictionary = rules.selectable_card_ids(hand, [_card("6"), _card("7", "Hearts"), _card("8", "Diamonds"), _card("9"), _card("10")], [])
+	_check(straights.has(_card("J").card_id()) and straights.has(_card("Q").card_id()), "Straight assist finds cards in higher five-card sequences")
+	var odd_switch_hand: Array = [_card("4"), _card("5"), _card("6"), _card("7"), _card("8")]
 	var odd_switch: Dictionary = rules.selectable_card_ids(odd_switch_hand, [_card("2", "Spades")], [])
-	_check(odd_switch.size() == 3, "UI assistance allows a higher odd-count Straight against a Single")
-	var even_switch_hand: Array = [_card("3"), _card("4"), _card("5"), _card("6")]
+	_check(odd_switch.size() == 5, "UI assistance allows a higher five-card Straight against a Single")
+	var even_switch_hand: Array = [_card("3", "Clubs"), _card("3", "Diamonds"), _card("3", "Hearts"), _card("3", "Spades")]
 	var even_switch: Dictionary = rules.selectable_card_ids(even_switch_hand, [_card("2", "Spades"), _card("2", "Diamonds")], [])
-	_check(even_switch.size() == 4, "UI assistance allows a higher even-count Straight against a Pair")
+	_check(even_switch.size() == 4, "UI assistance preserves even-family Four against Pair")
 	_check(rules.selectable_card_ids([_card("3"), _card("3", "Hearts")], [_card("2", "Spades")], []).is_empty(), "UI assistance blocks Pair cards against a Single")
 	_check(rules.selectable_card_ids([_card("8")], [_card("7"), _card("7", "Hearts"), _card("7", "Spades")], []).is_empty(), "UI assistance blocks a Single against a Triple")
 	var partial: Dictionary = rules.selectable_card_ids(hand, [_card("9"), _card("9", "Diamonds")], [_card("J").card_id()])
-	_check(partial.has(_card("J", "Hearts").card_id()) and partial.has(_card("J", "Spades").card_id()) and partial.has(_card("10").card_id()), "partial Pair selection also keeps cards completing a higher even-count combination")
-	var partial_straight: Dictionary = rules.selectable_card_ids(hand, [_card("7"), _card("8", "Hearts"), _card("9", "Diamonds")], [_card("8").card_id()])
-	_check(partial_straight.has(_card("10").card_id()) and partial_straight.has(_card("Q").card_id()), "partial Straight selection retains cards completing a higher odd-count combination")
+	_check(partial.has(_card("J", "Hearts").card_id()) and partial.has(_card("J", "Spades").card_id()), "partial Pair selection keeps cards completing a higher Pair")
+	var partial_straight: Dictionary = rules.selectable_card_ids(hand, [_card("6"), _card("7", "Hearts"), _card("8", "Diamonds"), _card("9"), _card("10")], [_card("J").card_id()])
+	_check(partial_straight.has(_card("Q").card_id()), "partial Straight selection retains cards completing a higher five-card combination")
 
 func _test_card_hover_visuals() -> void:
 	var card_view: CardView = CardViewScript.new()
@@ -847,6 +895,9 @@ func _test_bot_combinations() -> void:
 	var hand: Array = [_card("3"), _card("3", "Hearts"), _card("4"), _card("4", "Hearts"), _card("5"), _card("6"), _card("7")]
 	var lead: Array = bot.choose_play(hand, [], rules)
 	_check(not lead.is_empty() and rules.classify(lead).valid and int(rules.classify(lead).high_rank) == 0, "bot leads with a legal lowest-value combination")
+	_check(rules.classify(bot.choose_play([_card("7"), _card("7", "Hearts"), _card("7", "Spades")], [], rules)).type == "Triple", "bot can lead with a Triple to empty its hand")
+	_check(rules.classify(bot.choose_play([_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Hearts"), _card("8", "Spades"), _card("9", "Clubs")], [], rules)).type == "Straight", "bot can lead with a Straight to empty its hand")
+	_check(rules.classify(bot.choose_play([_card("5", "Clubs"), _card("6", "Clubs"), _card("7", "Clubs"), _card("8", "Clubs"), _card("9", "Clubs")], [], rules)).type == "Straight Flush", "bot can lead with a Straight Flush to empty its hand")
 	var pair_hand: Array = [_card("3"), _card("10"), _card("10", "Hearts"), _card("J"), _card("J", "Hearts"), _card("Q"), _card("Q", "Hearts")]
 	var response: Array = bot.choose_play(pair_hand, [_card("9"), _card("9", "Hearts")], rules)
 	_check(rules.classify(response).type == "Pair" and int(rules.classify(response).high_rank) == 7, "bot prefers the lowest same-type Pair to a lower Single")
@@ -856,19 +907,19 @@ func _test_bot_combinations() -> void:
 	var four_hand: Array = [_card("10"), _card("10", "Hearts"), _card("10", "Spades"), _card("10", "Diamonds"), _card("J"), _card("J", "Hearts"), _card("J", "Spades"), _card("J", "Diamonds")]
 	var four_play: Array = bot.choose_play(four_hand, [_card("9"), _card("9", "Hearts"), _card("9", "Spades"), _card("9", "Diamonds")], rules)
 	_check(rules.classify(four_play).type == "Four of a Kind" and int(rules.classify(four_play).high_rank) == 7, "bot responds with the lowest valid Four")
-	var straight_hand: Array = [_card("7"), _card("8"), _card("9"), _card("10"), _card("J")]
-	var straight_play: Array = bot.choose_play(straight_hand, [_card("6"), _card("7", "Hearts"), _card("8", "Spades")], rules)
-	_check(rules.classify(straight_play).type == "Straight" and int(rules.classify(straight_play).high_rank) == 6, "bot responds with the lowest valid Straight")
+	var straight_hand: Array = [_card("7", "Clubs"), _card("8", "Diamonds"), _card("9", "Hearts"), _card("10", "Spades"), _card("J", "Clubs")]
+	var straight_play: Array = bot.choose_play(straight_hand, [_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Hearts"), _card("8", "Spades"), _card("9", "Clubs")], rules)
+	_check(rules.classify(straight_play).type == "Straight" and int(rules.classify(straight_play).high_rank) == 8, "bot responds with the lowest valid five-card Straight")
 	var cross_type: Array = bot.choose_play([_card("4"), _card("5"), _card("6")], [_card("Q"), _card("Q", "Hearts")], rules)
-	_check(cross_type.is_empty(), "bot passes when it has no legal response with the same combination type and count")
+	_check(cross_type.is_empty(), "bot passes when it has no legal response in the same family")
 	var no_response: Array = bot.choose_play([_card("3"), _card("4")], [_card("A")], rules)
 	_check(no_response.is_empty(), "bot passes when it cannot respond")
-	var parity_switch: Array = bot.choose_play([_card("4"), _card("5"), _card("6")], [_card("2", "Spades")], rules)
-	_check(rules.classify(parity_switch).type == "Straight" and parity_switch.size() == 3, "bot can switch from a Single to a higher odd-count Straight")
-	var multi_card_single: Array = bot.choose_play([_card("8"), _card("9"), _card("10")], [_card("7"), _card("7", "Hearts"), _card("7", "Spades")], rules)
-	_check(rules.classify(multi_card_single).type == "Straight" and multi_card_single.size() == 3, "bot returns a higher three-card combination instead of a Single against a Triple")
-	var straight_single: Array = bot.choose_play([_card("8"), _card("9"), _card("10")], [_card("4"), _card("5"), _card("6")], rules)
-	_check(rules.classify(straight_single).type == "Straight" and straight_single.size() == 3, "bot returns a higher three-card combination against a Straight")
+	var parity_switch: Array = bot.choose_play([_card("3", "Clubs"), _card("4", "Diamonds"), _card("5", "Hearts"), _card("6", "Spades"), _card("7", "Clubs")], [_card("2", "Spades")], rules)
+	_check(rules.classify(parity_switch).type == "Straight", "bot can switch from a Single to a five-card Straight")
+	var multi_card_single: Array = bot.choose_play([_card("5", "Clubs"), _card("6", "Diamonds"), _card("7", "Hearts"), _card("8", "Spades"), _card("9", "Clubs")], [_card("3"), _card("3", "Hearts"), _card("3", "Spades")], rules)
+	_check(rules.classify(multi_card_single).type == "Straight" and multi_card_single.size() == 5, "bot can respond to a Triple with a legal Straight")
+	var straight_single: Array = bot.choose_play([_card("8", "Clubs"), _card("9", "Diamonds"), _card("10", "Hearts"), _card("J", "Spades"), _card("Q", "Clubs")], [_card("4", "Clubs"), _card("5", "Diamonds"), _card("6", "Hearts"), _card("7", "Spades"), _card("8", "Clubs", 1)], rules)
+	_check(rules.classify(straight_single).type == "Straight" and straight_single.size() == 5, "bot can answer a Straight with a stronger five-card Straight")
 	var suit_response_hand: Array = [_card("8", "Clubs"), _card("8", "Hearts"), _card("9", "Clubs")]
 	var suit_response: Array = bot.choose_play(suit_response_hand, [_card("8", "Diamonds")], rules)
 	_check(suit_response.size() == 1 and suit_response[0].rank == "8" and suit_response[0].suit == "Hearts", "bot uses suit strength and chooses 8 Hearts over 9 Clubs")
@@ -999,13 +1050,35 @@ func _test_server_parity_validation() -> void:
 	var room: Dictionary = service.rooms[code]
 	var game: GameState = room.game_state
 	game.players[1].hand = [_card("7", "Spades"), _card("10")]
-	game.current_cards = [_card("4", "Clubs"), _card("5", "Diamonds"), _card("6", "Hearts")]
+	game.current_cards = [_card("4", "Clubs"), _card("5", "Diamonds"), _card("6", "Hearts"), _card("7", "Spades"), _card("8", "Clubs")]
 	game.current_combination = game.rules.classify(game.current_cards)
 	game.current_player = 1
 	game.turns.start_at(1, 2)
 	var before_size: int = game.players[1].hand.size()
 	service.handle_message(884, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":[_card("7", "Spades").card_id()]}})
-	_check(game.players[1].hand.size() == before_size and str(game.current_combination.get("type", "")) == "Straight" and game.current_cards.size() == 3, "server rejects a malicious Single against an active Straight without mutating state")
+	_check(game.players[1].hand.size() == before_size and str(game.current_combination.get("type", "")) == "Straight" and game.current_cards.size() == 5, "server rejects a malicious Single against an active Straight without mutating state")
+
+func _test_server_cross_type_combo() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(887, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":2}})
+	var code := ""
+	for message in messages_by_peer.get(887, []):
+		if message.type == Protocol.ROOM_CREATED:
+			code = str(message.payload.room_code)
+	service.handle_message(888, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Friend", "room_code":code}})
+	_ready_peers(service, [887, 888])
+	service.handle_message(887, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	var room: Dictionary = service.rooms[code]
+	var game: GameState = room.game_state
+	var flush: Array = [_card("5", "Clubs"), _card("6", "Clubs"), _card("7", "Clubs"), _card("8", "Clubs"), _card("9", "Clubs")]
+	game.players[1].hand = flush + [_card("2", "Spades")]
+	game.current_cards = [_card("10", "Clubs"), _card("J", "Diamonds"), _card("Q", "Hearts"), _card("K", "Spades"), _card("A", "Clubs")]
+	game.current_combination = game.rules.classify(game.current_cards)
+	game.current_player = 1
+	game.turns.start_at(1, 2)
+	service.handle_message(888, {"type":Protocol.PLAY_CARDS, "payload":{"card_ids":_ids(flush)}})
+	_check(game.players[1].hand.size() == 1 and game.current_combination.type == "Straight Flush", "server accepts a legal Straight Flush response to an ordinary Straight")
 
 func _test_server_single_against_multi_card_server_validation() -> void:
 	var service = RoomServiceScript.new()

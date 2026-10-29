@@ -575,7 +575,10 @@ func _refresh() -> void:
 	_layout_game_hud()
 	var center_text := "Lead a combination"
 	if not state.current_cards.is_empty():
-		center_text = "%s · %s" % [str(state.current_combination.get("type", "Play")), str(state.players[state.last_player].name)]
+		var combination_name := str(state.current_combination.get("type", "Play"))
+		if combination_name == "Triple":
+			combination_name = "Three of a Kind"
+		center_text = "%s · %s" % [combination_name, str(state.players[state.last_player].name)]
 	table_presentation.configure(state.players, 0, state.current_player, state.passed, state.current_cards, center_text, _is_compact_view(), state.last_player)
 	table_presentation.set_center_info("Cards: %d · Turn %d of %d" % [state.players[0].hand.size(), state.current_player + 1, state.players.size()])
 	for child in hand_box.get_children():

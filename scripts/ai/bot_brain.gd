@@ -5,6 +5,11 @@ func choose_play(hand: Array, current_cards: Array, rules) -> Array:
 	var legal_plays: Array = rules.list_legal_combinations(hand, current_cards)
 	if legal_plays.is_empty():
 		return []
+	# Preserve the existing low-value choice unless a play immediately empties
+	# the hand. This lets bots finish with valid triples/straights/flushes.
+	for play: Array in legal_plays:
+		if play.size() == hand.size():
+			return play.duplicate()
 	var candidate_pool: Array = legal_plays
 	if not current_cards.is_empty():
 		var current_info: Dictionary = rules.classify(current_cards)

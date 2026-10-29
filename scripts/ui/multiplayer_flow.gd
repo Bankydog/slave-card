@@ -615,7 +615,10 @@ func _show_online_game() -> void:
 	var combination: Dictionary = online_snapshot.get("combination", {})
 	var center_text := "Lead a combination"
 	if not current_cards.is_empty():
-		center_text = "%s · %s" % [str(combination.get("type", "Play")), str(online_snapshot.get("last_player_name", "Last player"))]
+		var combination_name := str(combination.get("type", "Play"))
+		if combination_name == "Triple":
+			combination_name = "Three of a Kind"
+		center_text = "%s · %s" % [combination_name, str(online_snapshot.get("last_player_name", "Last player"))]
 	var passed: Array = []
 	for player in online_players:
 		passed.append(bool(player.get("passed", false)))
