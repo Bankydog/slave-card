@@ -36,6 +36,7 @@ var next_round_starter := -1
 var local_rps_players: Array[int] = []
 var local_rps_round := 1
 var local_rps_message := ""
+var local_rps_pending_winner := -1
 var player_count := 4
 var local_player_name := "Player"
 var table_background: TextureRect
@@ -244,21 +245,36 @@ func _start_local_round() -> void:
 	_build_table()
 	_refresh()
 
+func _create_local_rps_root() -> VBoxContainer:
+	set_game_background(player_count)
+	var root := Control.new()
+	root.name = "LocalRPSLayout"
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(root)
+	var table := TablePresentationScript.new()
+	table.name = "TablePresentation"
+	table.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_child(table)
+	var layout: Dictionary = TableLayoutScript.layout_for_viewport(get_viewport_rect().size)
+	var table_rect: Rect2 = layout.table_zone
+	var content := VBoxContainer.new()
+	content.position = table_rect.position
+	content.size = table_rect.size
+	content.alignment = BoxContainer.ALIGNMENT_CENTER
+	content.add_theme_constant_override("separation", roundi(10.0 * _display_scale()))
+	root.add_child(content)
+	return content
+
 func _show_local_rps() -> void:
 	_clear_preserving_timer()
-	set_game_background(player_count)
-	var root := VBoxContainer.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.alignment = BoxContainer.ALIGNMENT_CENTER
-	root.add_theme_constant_override("separation", roundi(10.0 * _display_scale()))
-	add_child(root)
+	var root := _create_local_rps_root()
 	var heading := Label.new()
 	heading.text = local_rps_message if not local_rps_message.is_empty() else "Two players hold 3♣. Choose a card:"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(heading)
 	var held_cards := HBoxContainer.new()
 	held_cards.alignment = BoxContainer.ALIGNMENT_CENTER
-	held_cards.add_theme_constant_override("separation", roundi(30.0 * _display_scale()))
+	held_cards.add_theme_constant_override("separation", roundi(36.0 * _display_scale()))
 	root.add_child(held_cards)
 	for player_index in local_rps_players:
 		var holder := VBoxContainer.new()
@@ -268,7 +284,8 @@ func _show_local_rps() -> void:
 		back.texture = TablePresentationScript.rps_back_texture()
 		back.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		back.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		back.custom_minimum_size = Vector2(56.0, 78.0) * _display_scale()
+		back.custom_minimum_size = Vector2(92.0, 128.0) * _display_scale()
+		back.size = back.custom_minimum_size
 		holder.add_child(back)
 		var holder_label := Label.new()
 		holder_label.text = "You" if player_index == 0 else str(state.players[player_index].name)
@@ -276,7 +293,7 @@ func _show_local_rps() -> void:
 		holder.add_child(holder_label)
 	var options := HBoxContainer.new()
 	options.alignment = BoxContainer.ALIGNMENT_CENTER
-	options.add_theme_constant_override("separation", roundi(8.0 * _display_scale()))
+	options.add_theme_constant_override("separation", roundi(12.0 * _display_scale()))
 	root.add_child(options)
 	var choice_names := ["Rock", "Paper", "Scissors"]
 	for choice in range(choice_names.size()):
@@ -287,7 +304,7 @@ func _show_local_rps() -> void:
 		pick.texture_normal = TablePresentationScript.rps_texture(choice)
 		pick.ignore_texture_size = true
 		pick.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
-		pick.custom_minimum_size = Vector2(76.0, 106.0) * _display_scale()
+		pick.custom_minimum_size = Vector2(68.0, 95.0) * _display_scale()
 		pick.pressed.connect(_choose_local_rps.bind(choice))
 		column.add_child(pick)
 		var caption := Label.new()
@@ -306,22 +323,44 @@ func _choose_local_rps(human_choice: int) -> void:
 	var opponent := int(local_rps_players[1]) if int(local_rps_players[0]) == 0 else int(local_rps_players[0])
 	var bot_choice: int = state.rng.randi_range(0, 2)
 	var result := _rps_winner(human_choice, bot_choice)
-	await _animate_local_rps_reveal(human_choice, bot_choice)
+	var result_root: VBoxContainer = await _animate_local_rps_reveal(human_choice, bot_choice)
+	if not is_instance_valid(result_root):
+		return
 	if result < 0:
 		local_rps_round += 1
-		local_rps_message = "Tie! Choose again (round %d)." % local_rps_round
-		_show_local_rps()
+		local_rps_message = "Tie. Choose again (round %d)." % local_rps_round
+		var tie_message := Label.new()
+		tie_message.text = "Tie. Choose again."
+		tie_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		result_root.add_child(tie_message)
+		await get_tree().create_timer(0.8).timeout
+		if is_inside_tree():
+			_show_local_rps()
 		return
-	_finish_local_rps(0 if result == 0 else opponent)
+	local_rps_pending_winner = 0 if result == 0 else opponent
+	var winner_name := "You" if local_rps_pending_winner == 0 else str(state.players[local_rps_pending_winner].name)
+	var result_label := Label.new()
+	result_label.text = "%s %s the tiebreaker and starts this round." % [winner_name, "win" if winner_name == "You" else "wins"]
+	result_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	result_root.add_child(result_label)
+	var choice_names := ["Rock", "Paper", "Scissors"]
+	var winning_choice := human_choice if local_rps_pending_winner == 0 else bot_choice
+	var losing_choice := bot_choice if local_rps_pending_winner == 0 else human_choice
+	if winning_choice != losing_choice:
+		var reason_label := Label.new()
+		reason_label.text = "%s beats %s" % [choice_names[winning_choice], choice_names[losing_choice]]
+		reason_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		result_root.add_child(reason_label)
+	var start_round := Button.new()
+	start_round.text = "Start Round"
+	start_round.custom_minimum_size = Vector2(190.0, 48.0) * _display_scale()
+	start_round.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	start_round.pressed.connect(_finish_local_rps.bind(local_rps_pending_winner))
+	result_root.add_child(start_round)
 
-func _animate_local_rps_reveal(human_choice: int, bot_choice: int) -> void:
+func _animate_local_rps_reveal(human_choice: int, bot_choice: int) -> VBoxContainer:
 	_clear_preserving_timer()
-	set_game_background(player_count)
-	var root := VBoxContainer.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.alignment = BoxContainer.ALIGNMENT_CENTER
-	root.add_theme_constant_override("separation", roundi(8.0 * _display_scale()))
-	add_child(root)
+	var root := _create_local_rps_root()
 	var heading := Label.new()
 	heading.text = "Rock · Paper · Scissors"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -340,6 +379,7 @@ func _animate_local_rps_reveal(human_choice: int, bot_choice: int) -> void:
 		face.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		face.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		face.custom_minimum_size = Vector2(92.0, 128.0) * _display_scale()
+		face.size = face.custom_minimum_size
 		face.pivot_offset = face.custom_minimum_size * 0.5
 		holder.add_child(face)
 		faces.append(face)
@@ -364,10 +404,8 @@ func _animate_local_rps_reveal(human_choice: int, bot_choice: int) -> void:
 		tween.tween_property(face, "scale:x", 1.0, 0.15).set_trans(Tween.TRANS_CUBIC)
 	await tween.finished
 	if not is_inside_tree():
-		return
-	if _rps_winner(first_choice, second_choice) < 0:
-		heading.text = "Tie"
-		await get_tree().create_timer(0.35).timeout
+		return null
+	return root
 
 func _local_bot_rps_winner() -> int:
 	while true:
@@ -388,13 +426,13 @@ func _finish_local_rps(winner: int) -> void:
 	state.turns.start_at(winner, player_count)
 	local_rps_players.clear()
 	local_rps_message = ""
+	local_rps_pending_winner = -1
 	_clear_preserving_timer()
 	_build_table()
 	_refresh()
 
 func _build_table() -> void:
 	set_game_background(player_count)
-	table_background.visible = false
 	var root := Control.new()
 	root.name = "GameplayLayout"
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -505,12 +543,13 @@ func _layout_game_hud() -> void:
 	bottom_hud_control.position = bottom_hud.position
 	bottom_hud_control.size = bottom_hud.size
 	var scroll := bottom_hud_control.get_node("LocalHandScroll") as ScrollContainer
-	var hand_height := minf((77.0 if _is_compact_view() else 109.0) * scale, bottom_hud.size.y - 74.0 * scale)
-	scroll.position = Vector2(24.0 * scale, 2.0 * scale)
-	scroll.size = Vector2(maxf(1.0, bottom_hud.size.x - 48.0 * scale), hand_height)
+	var hand_height := minf((77.0 if _is_compact_view() else 109.0) * scale, bottom_hud.size.y - 8.0 * scale)
+	var action_width := 250.0 * scale
+	scroll.position = Vector2(24.0 * scale, maxf(0.0, (bottom_hud.size.y - hand_height) * 0.5))
+	scroll.size = Vector2(maxf(1.0, bottom_hud.size.x - action_width - 32.0 * scale), hand_height)
 	hand_box.add_theme_constant_override("separation", roundi(-29.0 * scale))
-	buttons_box.position = Vector2(0.0, hand_height)
-	buttons_box.size = Vector2(bottom_hud.size.x, maxf(0.0, bottom_hud.size.y - hand_height))
+	buttons_box.position = Vector2(bottom_hud.size.x - action_width - 12.0 * scale, 0.0)
+	buttons_box.size = Vector2(action_width, bottom_hud.size.y)
 	buttons_box.add_theme_constant_override("separation", roundi(8.0 * scale))
 	for button in buttons_box.get_children():
 		if button is BaseButton:
@@ -784,7 +823,8 @@ func set_game_background(_players: int) -> void:
 	if not is_instance_valid(table_background):
 		return
 	table_background.texture = TABLE_TEXTURE
-	table_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	table_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	table_background.modulate = Color(0.42, 0.42, 0.42, 1.0)
 	table_background.visible = true
 
 func set_title_screen_enabled(enabled: bool) -> void:
@@ -793,9 +833,10 @@ func set_title_screen_enabled(enabled: bool) -> void:
 	if enabled:
 		table_background.texture = TITLE_TEXTURE
 		table_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		table_background.modulate = Color.WHITE
+		table_background.visible = true
 	else:
-		table_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	table_background.visible = enabled
+		set_game_background(player_count)
 
 func _display_scale() -> float:
 	return float(TableLayoutScript.layout_for_viewport(get_viewport_rect().size).scale)

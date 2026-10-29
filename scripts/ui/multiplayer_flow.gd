@@ -40,7 +40,9 @@ var online_phase := "lobby"
 var rps_players: Array = []
 var rps_choices: Dictionary = {}
 var rps_round := 1
+var rps_winner := -1
 var online_rps_reveal_active := false
+var online_rps_revealed_key := ""
 var queued_turn_snapshot: Dictionary = {}
 var online_players: Array = []
 var online_hand: Array[CardData] = []
@@ -400,6 +402,7 @@ func _show_lobby() -> void:
 	code_label.add_theme_font_size_override("font_size", 24)
 	code_row.add_child(code_label)
 	var copy_button := Button.new()
+	copy_button.name = "CopyRoomCodeButton"
 	copy_button.text = "Copy"
 	copy_button.custom_minimum_size = Vector2(82, 32 if _is_compact_view() else 40) * _display_scale()
 	copy_button.pressed.connect(_copy_room_code.bind(copy_button))
@@ -439,13 +442,33 @@ func _show_lobby() -> void:
 		var is_bot := bool(player.get("is_bot", false))
 		var is_local := int(player.get("player_index", -1)) == local_player_index
 		var card := Button.new()
+		card.name = "LobbyPlayerCard_%d" % int(player.get("player_index", 0))
 		card.custom_minimum_size = Vector2(220.0, 42.0 if _is_compact_view() else 54.0) * _display_scale()
+		card.add_theme_font_size_override("font_size", maxi(16, roundi(17.0 * _display_scale())))
+		_style_lobby_card_background(card)
 		var badge := "Host" if bool(player.get("is_host", false)) else ("Bot" if is_bot else "Guest")
 		var ready_text := "Ready" if bool(player.get("ready", false)) else "Not Ready"
-		card.text = "%s  ·  %s  ·  %s" % [str(player.get("name", "Guest")), badge, ready_text]
-		if bool(player.get("disconnected", false)):
-			card.text = "%s  ·  LEFT" % str(player.get("name", "Player"))
-		card.add_theme_font_size_override("font_size", maxi(16, roundi(17.0 * _display_scale())))
+		var card_row := HBoxContainer.new()
+		card_row.name = "LobbyPlayerRow"
+		card_row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		card_row.offset_left = 8.0 * _display_scale()
+		card_row.offset_right = -8.0 * _display_scale()
+		card_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card_row.add_theme_constant_override("separation", roundi(8.0 * _display_scale()))
+		card.add_child(card_row)
+		var player_name_label := Label.new()
+		player_name_label.text = str(player.get("name", "Guest"))
+		player_name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		player_name_label.clip_text = true
+		card_row.add_child(player_name_label)
+		var badge_label := Label.new()
+		badge_label.text = badge
+		card_row.add_child(badge_label)
+		var ready_label := Label.new()
+		ready_label.name = "LobbyReadyState"
+		ready_label.text = "LEFT" if bool(player.get("disconnected", false)) else ready_text
+		ready_label.add_theme_color_override("font_color", Color("#23723b") if bool(player.get("ready", false)) else Color("#a52a2a"))
+		card_row.add_child(ready_label)
 		card.disabled = is_bot or is_local or player_peer <= 0 or not outgoing_seat_swaps.is_empty() or not incoming_seat_swap.is_empty()
 		if not card.disabled:
 			card.pressed.connect(func(): _send_request(Protocol.REQUEST_SEAT_SWAP, {"target_peer_id": player_peer}))
@@ -460,7 +483,8 @@ func _show_lobby() -> void:
 	ready_summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(ready_summary)
 	var local_ready := local_player_index >= 0 and local_player_index < room_players.size() and bool(room_players[local_player_index].get("ready", false))
-	_action_button(root, "Cancel Ready" if local_ready else "Ready", func(): _send_request(Protocol.SET_READY, {"ready": not local_ready}))
+	var ready_button := _action_button(root, "Cancel Ready" if local_ready else "Ready", func(): _send_request(Protocol.SET_READY, {"ready": not local_ready}))
+	ready_button.name = "Action_Ready"
 	if is_host:
 		var fill_bots := CheckBox.new()
 		fill_bots.text = "Fill empty seats with bots"
@@ -476,6 +500,58 @@ func _show_lobby() -> void:
 	_action_button(root, "Leave Room", _leave_room, 170)
 	_status(root)
 	_enforce_text_minimum(root)
+	_style_lobby_controls(root)
+
+func _style_lobby_card_background(card: Button) -> void:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color("#f3f0e6")
+	normal.border_color = Color("#807b6e")
+	normal.set_border_width_all(1)
+	normal.set_corner_radius_all(6)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color("#e8e4d8")
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color("#dcd8cc")
+	card.add_theme_stylebox_override("normal", normal)
+	card.add_theme_stylebox_override("hover", hover)
+	card.add_theme_stylebox_override("pressed", pressed)
+	card.add_theme_stylebox_override("disabled", normal.duplicate())
+
+func _style_lobby_button(button: Button, normal_color: Color, hover_color: Color, pressed_color: Color, disabled_color: Color = Color("#777777")) -> void:
+	for state in ["normal", "hover", "pressed", "disabled"]:
+		var style := StyleBoxFlat.new()
+		style.bg_color = normal_color
+		if state == "hover":
+			style.bg_color = hover_color
+		elif state == "pressed":
+			style.bg_color = pressed_color
+		elif state == "disabled":
+			style.bg_color = disabled_color
+		style.set_corner_radius_all(6)
+		style.content_margin_left = 8
+		style.content_margin_right = 8
+		button.add_theme_stylebox_override(state, style)
+	button.add_theme_color_override("font_color", Color.WHITE)
+	button.add_theme_color_override("font_hover_color", Color.WHITE)
+	button.add_theme_color_override("font_pressed_color", Color.WHITE)
+	button.add_theme_color_override("font_disabled_color", Color("#f1f1ee") if button.name == "Action_StartGame" else Color("#ddddda"))
+
+func _style_lobby_controls(root: Control) -> void:
+	var ready_button := root.find_child("Action_Ready", true, false) as Button
+	if is_instance_valid(ready_button):
+		_style_lobby_button(ready_button, Color("#b3261e"), Color("#d63a30"), Color("#8f1d18"))
+	var start_button := root.find_child("Action_StartGame", true, false) as Button
+	if is_instance_valid(start_button):
+		_style_lobby_button(start_button, Color("#176b3a"), Color("#21854c"), Color("#10552e"), Color("#777777"))
+	var copy_button := root.find_child("CopyRoomCodeButton", true, false) as Button
+	if is_instance_valid(copy_button):
+		_style_lobby_button(copy_button, Color("#30343a"), Color("#464b52"), Color("#22262b"))
+	var leave_button := root.find_child("Action_LeaveRoom", true, false) as Button
+	if is_instance_valid(leave_button):
+		_style_lobby_button(leave_button, Color("#791e1e"), Color("#a22b2b"), Color("#5f1515"))
+	for ready_node in root.find_children("LobbyReadyState", "Label", true, false):
+		var ready_label := ready_node as Label
+		ready_label.add_theme_color_override("font_color", Color("#23723b") if ready_label.text == "Ready" else Color("#a52a2a"))
 
 func _image_action_button(button_name: String, texture_path: String, tooltip: String, action: Callable) -> TextureButton:
 	var button := TextureButton.new()
@@ -492,6 +568,10 @@ func _image_action_button(button_name: String, texture_path: String, tooltip: St
 
 func _show_online_game() -> void:
 	page = "game"
+	if online_phase == "rps_result":
+		if online_rps_revealed_key.is_empty() and not online_rps_reveal_active:
+			_reveal_online_rps()
+		return
 	var trading := online_phase == "card_exchange"
 	if trading and exchange_role.begins_with("Slave ") and selected_card_ids.is_empty():
 		selected_card_ids = exchange_mandatory_ids.duplicate()
@@ -506,18 +586,25 @@ func _show_online_game() -> void:
 	var host := get_parent()
 	if host.has_method("set_game_background"):
 		host.set_game_background(online_players.size())
-	if online_phase == "rps_tiebreak":
-		var rps_center := CenterContainer.new()
-		rps_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		root.add_child(rps_center)
+	if host.has_method("set_title_screen_enabled"):
+		host.set_title_screen_enabled(false)
+	if online_phase in ["rps_tiebreak", "rps_result"]:
+		var table := TablePresentationScript.new()
+		table.name = "TablePresentation"
+		table.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		root.add_child(table)
+		var layout: Dictionary = TableLayoutScript.layout_for_viewport(get_viewport_rect().size)
+		var table_rect: Rect2 = layout.table_zone
 		var rps_content := VBoxContainer.new()
+		rps_content.name = "RPSContent"
+		rps_content.position = table_rect.position
+		rps_content.size = table_rect.size
 		rps_content.alignment = BoxContainer.ALIGNMENT_CENTER
-		rps_center.add_child(rps_content)
+		rps_content.add_theme_constant_override("separation", roundi(10.0 * _display_scale()))
+		root.add_child(rps_content)
 		_show_online_rps(rps_content)
 		_enforce_text_minimum(root)
 		return
-	if host.has_method("set_title_screen_enabled"):
-		host.set_title_screen_enabled(false)
 
 	var current_cards: Array[CardData] = []
 	var serialized_cards: Array = online_snapshot.get("current_cards", [])
@@ -605,8 +692,10 @@ func _show_online_game() -> void:
 	hand_scroll.name = "OnlineHandScroll"
 	hand_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	hand_scroll.position = Vector2(24.0, 2.0) * scale
-	var hand_height := minf((77.0 if _is_compact_view() else 109.0) * scale, bottom_rect.size.y - 74.0 * scale)
-	hand_scroll.size = Vector2(maxf(1.0, bottom_rect.size.x - 48.0 * scale), hand_height)
+	var hand_height := minf((77.0 if _is_compact_view() else 109.0) * scale, bottom_rect.size.y - 8.0 * scale)
+	var action_width := 250.0 * scale
+	hand_scroll.position = Vector2(24.0 * scale, maxf(0.0, (bottom_rect.size.y - hand_height) * 0.5))
+	hand_scroll.size = Vector2(maxf(1.0, bottom_rect.size.x - action_width - 32.0 * scale), hand_height)
 	bottom_hud.add_child(hand_scroll)
 	var hand_center := CenterContainer.new()
 	hand_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -641,8 +730,8 @@ func _show_online_game() -> void:
 	var buttons := HBoxContainer.new()
 	buttons.name = "OnlineActions"
 	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
-	buttons.position = Vector2(0.0, hand_height)
-	buttons.size = Vector2(bottom_rect.size.x, maxf(0.0, bottom_rect.size.y - hand_height))
+	buttons.position = Vector2(bottom_rect.size.x - action_width - 12.0 * scale, 0.0)
+	buttons.size = Vector2(action_width, bottom_rect.size.y)
 	buttons.add_theme_constant_override("separation", roundi(8.0 * scale))
 	bottom_hud.add_child(buttons)
 	if trading:
@@ -674,11 +763,11 @@ func _trade_summary_parts() -> Array[String]:
 func _show_online_rps(root: Control) -> void:
 	var heading := Label.new()
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	heading.text = "Two players hold 3♣ · choose rock, paper, or scissors" if rps_round <= 1 else "Tie · choose again (round %d)" % rps_round
+	heading.text = "Two players hold 3♣. Choose a card:" if rps_round <= 1 else "Tie. Choose again (round %d)." % rps_round
 	root.add_child(heading)
 	var held_cards := HBoxContainer.new()
 	held_cards.alignment = BoxContainer.ALIGNMENT_CENTER
-	held_cards.add_theme_constant_override("separation", roundi(24.0 * _display_scale()))
+	held_cards.add_theme_constant_override("separation", roundi(36.0 * _display_scale()))
 	root.add_child(held_cards)
 	for player_index_value in rps_players:
 		var player_index := int(player_index_value)
@@ -689,7 +778,8 @@ func _show_online_rps(root: Control) -> void:
 		back.texture = TablePresentationScript.rps_back_texture()
 		back.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		back.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		back.custom_minimum_size = Vector2(60.0, 84.0) * _display_scale()
+		back.custom_minimum_size = Vector2(92.0, 128.0) * _display_scale()
+		back.size = back.custom_minimum_size
 		holder.add_child(back)
 		var holder_label := Label.new()
 		holder_label.text = "You" if player_index == online_player_index else str(online_players[player_index].get("name", "Opponent")) if player_index < online_players.size() else "Opponent"
@@ -697,7 +787,7 @@ func _show_online_rps(root: Control) -> void:
 		holder.add_child(holder_label)
 	var choices := HBoxContainer.new()
 	choices.alignment = BoxContainer.ALIGNMENT_CENTER
-	choices.add_theme_constant_override("separation", roundi(8.0 * _display_scale()))
+	choices.add_theme_constant_override("separation", roundi(12.0 * _display_scale()))
 	root.add_child(choices)
 	var local_is_tied := rps_players.has(online_player_index)
 	var already_chosen := rps_choices.has(str(online_player_index))
@@ -707,7 +797,7 @@ func _show_online_rps(root: Control) -> void:
 			button.texture_normal = TablePresentationScript.rps_texture(choice)
 			button.ignore_texture_size = true
 			button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
-			button.custom_minimum_size = Vector2(72.0, 100.0) * _display_scale()
+			button.custom_minimum_size = Vector2(68.0, 95.0) * _display_scale()
 			button.pressed.connect(_select_rps_choice.bind(choice))
 			choices.add_child(button)
 	else:
@@ -720,20 +810,39 @@ func _reveal_online_rps() -> void:
 	if online_rps_reveal_active:
 		return
 	online_rps_reveal_active = true
-	var choices_snapshot := rps_choices.duplicate(true)
-	var players_snapshot := rps_players.duplicate()
-	var root := _root_box("3♣ Tie Break")
+	_clear_screen()
+	var host := get_parent()
+	if host.has_method("set_game_background"):
+		host.set_game_background(online_players.size())
+	if host.has_method("set_title_screen_enabled"):
+		host.set_title_screen_enabled(false)
+	var root := Control.new()
+	root.name = "OnlineRPSResultLayout"
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(root)
+	var table := TablePresentationScript.new()
+	table.name = "TablePresentation"
+	table.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_child(table)
+	var layout: Dictionary = TableLayoutScript.layout_for_viewport(get_viewport_rect().size)
+	var table_rect: Rect2 = layout.table_zone
+	var content := VBoxContainer.new()
+	content.position = table_rect.position
+	content.size = table_rect.size
+	content.alignment = BoxContainer.ALIGNMENT_CENTER
+	content.add_theme_constant_override("separation", roundi(10.0 * _display_scale()))
+	root.add_child(content)
 	var heading := Label.new()
 	heading.text = "Rock · Paper · Scissors"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	root.add_child(heading)
+	content.add_child(heading)
 	var cards := HBoxContainer.new()
 	cards.alignment = BoxContainer.ALIGNMENT_CENTER
-	cards.add_theme_constant_override("separation", roundi(30.0 * _display_scale()))
-	root.add_child(cards)
+	cards.add_theme_constant_override("separation", roundi(36.0 * _display_scale()))
+	content.add_child(cards)
 	var faces: Array[TextureRect] = []
 	var revealed_textures: Array[Texture2D] = []
-	for player_value in players_snapshot:
+	for player_value in rps_players:
 		var player_index := int(player_value)
 		var holder := VBoxContainer.new()
 		holder.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -743,9 +852,11 @@ func _reveal_online_rps() -> void:
 		face.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		face.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		face.custom_minimum_size = Vector2(92.0, 128.0) * _display_scale()
+		face.size = face.custom_minimum_size
+		face.pivot_offset = face.custom_minimum_size * 0.5
 		holder.add_child(face)
 		faces.append(face)
-		var choice := int(choices_snapshot.get(str(player_index), 0))
+		var choice := int(rps_choices.get(str(player_index), 0))
 		revealed_textures.append(TablePresentationScript.rps_texture(choice))
 		var player_name := str(online_players[player_index].get("name", "Player %d" % (player_index + 1))) if player_index < online_players.size() else "Player %d" % (player_index + 1)
 		var label := Label.new()
@@ -766,14 +877,44 @@ func _reveal_online_rps() -> void:
 	for face in faces:
 		tween.tween_property(face, "scale:x", 1.0, 0.15).set_trans(Tween.TRANS_CUBIC)
 	await tween.finished
+	if not is_inside_tree():
+		return
 	online_rps_reveal_active = false
-	if not queued_turn_snapshot.is_empty():
-		online_snapshot = queued_turn_snapshot
-		queued_turn_snapshot.clear()
-		online_phase = str(online_snapshot.get("phase", "playing"))
-		online_players = online_snapshot.get("players", online_players)
-		if page == "game":
-			_show_online_game()
+	if rps_winner < 0:
+		var tie_message := Label.new()
+		tie_message.text = "Tie. Choose again."
+		tie_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		content.add_child(tie_message)
+		if is_host:
+			var again := Button.new()
+			again.text = "Choose Again"
+			again.custom_minimum_size = Vector2(190.0, 48.0) * _display_scale()
+			again.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			again.pressed.connect(_send_request.bind(Protocol.CONTINUE_RPS, {}))
+			content.add_child(again)
+		else:
+			_add_rps_waiting_label(content, "Waiting for host to start another tiebreak.")
+	else:
+		var winner_name := "You" if rps_winner == online_player_index else str(online_players[rps_winner].get("name", "Player %d" % (rps_winner + 1))) if rps_winner >= 0 and rps_winner < online_players.size() else "The opponent"
+		var result_label := Label.new()
+		result_label.text = "%s %s the tiebreaker and starts this round." % [winner_name, "win" if winner_name == "You" else "wins"]
+		result_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		content.add_child(result_label)
+		if is_host:
+			var start_round := Button.new()
+			start_round.text = "Start Round"
+			start_round.custom_minimum_size = Vector2(190.0, 48.0) * _display_scale()
+			start_round.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			start_round.pressed.connect(_send_request.bind(Protocol.CONTINUE_RPS, {}))
+			content.add_child(start_round)
+		else:
+			_add_rps_waiting_label(content, "Waiting for host to start the round.")
+
+func _add_rps_waiting_label(parent: Control, message: String) -> void:
+	var waiting := Label.new()
+	waiting.text = message
+	waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	parent.add_child(waiting)
 
 func _select_rps_choice(choice: int) -> void:
 	_send_request(Protocol.SELECT_RPS, {"choice": choice})
@@ -990,11 +1131,16 @@ func _on_server_message(message: Dictionary) -> void:
 			rps_players = payload.get("players", rps_players)
 			rps_choices = payload.get("choices", {})
 			rps_round = int(payload.get("round", rps_round))
+			rps_winner = int(payload.get("winner", -1))
 			online_phase = str(payload.get("phase", online_phase))
 			if page == "game":
-				if online_phase == "playing" and rps_choices.size() >= rps_players.size() and not rps_players.is_empty():
-					_reveal_online_rps()
-				else:
+				if online_phase == "rps_result" and rps_choices.size() >= rps_players.size() and not rps_players.is_empty():
+					var reveal_key := "%d:%s" % [rps_round, str(rps_choices)]
+					if reveal_key != online_rps_revealed_key:
+						online_rps_revealed_key = reveal_key
+						_reveal_online_rps()
+				elif online_phase == "rps_tiebreak":
+					online_rps_revealed_key = ""
 					_show_online_game()
 		Protocol.TURN_CHANGED:
 			if online_rps_reveal_active:
@@ -1104,7 +1250,20 @@ func _enforce_node_text_minimum(node: Node) -> void:
 	if node is Label or node is Button or node is LineEdit:
 		var control := node as Control
 		control.add_theme_font_size_override("font_size", maxi(16, control.get_theme_font_size("font_size")))
-	if node is Label and page in ["main", "create", "join", "lobby"]:
+	if page == "lobby":
+		if node is Label:
+			(node as Label).add_theme_color_override("font_color", Color("#111111"))
+		elif node is Button:
+			var button := node as Button
+			button.add_theme_color_override("font_color", Color("#111111"))
+			button.add_theme_color_override("font_hover_color", Color("#111111"))
+			button.add_theme_color_override("font_pressed_color", Color("#111111"))
+			button.add_theme_color_override("font_disabled_color", Color("#444444"))
+		elif node is LineEdit:
+			var line_edit := node as LineEdit
+			line_edit.add_theme_color_override("font_color", Color("#111111"))
+			line_edit.add_theme_color_override("font_placeholder_color", Color("#555555"))
+	elif node is Label and page in ["main", "create", "join"]:
 		(node as Label).add_theme_color_override("font_color", Color(0.12, 0.09, 0.07))
 	for child in node.get_children():
 		_enforce_node_text_minimum(child)

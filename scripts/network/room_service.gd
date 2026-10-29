@@ -48,6 +48,8 @@ func handle_message(peer_id: int, message: Dictionary) -> void:
 			_select_cards(peer_id, payload)
 		Protocol.SELECT_RPS:
 			_select_rps(peer_id, payload)
+		Protocol.CONTINUE_RPS:
+			_continue_rps(peer_id)
 		_:
 			_reject(peer_id, "Unknown action.")
 
@@ -108,6 +110,7 @@ func _create_room(peer_id: int, payload: Dictionary) -> void:
 		"rps_players": [],
 		"rps_choices": {},
 		"rps_round": 1,
+		"rps_winner": -1,
 		"bot_delay": 0.0,
 		"last_finished_count": 0,
 		"pending_seat_swaps": [],
@@ -167,14 +170,14 @@ func _leave_room(peer_id: int, disconnected: bool = false) -> void:
 	else:
 		departed.peer_id = 0
 		departed.disconnected = true
-		departed.forfeited_this_round = room.phase in ["playing", "card_exchange", "rps_tiebreak"]
+		departed.forfeited_this_round = room.phase in ["playing", "card_exchange", "rps_tiebreak", "rps_result"]
 		departed.ready = false
 		if int(room.host_peer) == peer_id:
 			room.host_peer = _first_connected_peer(room)
 		if room.phase == "playing" and room.game_state != null:
 			room.game_state.forfeit_player(departed_index)
 			_after_action(room)
-		elif room.phase in ["card_exchange", "rps_tiebreak"] and room.game_state != null:
+		elif room.phase in ["card_exchange", "rps_tiebreak", "rps_result"] and room.game_state != null:
 			_resolve_preplay_forfeit(room, departed_index)
 	_broadcast(room, Protocol.PLAYER_LEFT, {"player_index": departed_index, "name": departed.name, "disconnected": disconnected})
 	_broadcast_lobby(room)
@@ -395,6 +398,7 @@ func _start_round(room: Dictionary) -> void:
 	room.rps_players = []
 	room.rps_choices = {}
 	room.rps_round = 1
+	room.rps_winner = -1
 	if round_starter < 0:
 		room.rps_players = room.game_state.three_clubs_holders()
 		if room.rps_players.size() > 1:
@@ -462,29 +466,42 @@ func _resolve_rps(room: Dictionary) -> void:
 	var first := int(room.rps_choices[str(room.rps_players[0])])
 	var second := int(room.rps_choices[str(room.rps_players[1])])
 	var outcome := _rps_winner(first, second)
-	if outcome < 0:
-		room.rps_round = int(room.rps_round) + 1
-		room.rps_choices.clear()
-		for player_index in room.rps_players:
-			if bool(room.members[player_index].is_bot):
-				room.rps_choices[str(player_index)] = rng.randi_range(0, 2)
-		_broadcast_rps_state(room)
-		if room.rps_choices.size() == room.rps_players.size():
-			_resolve_rps(room)
-		return
-	var winner: int = int(room.rps_players[0]) if outcome == 0 else int(room.rps_players[1])
-	room.game_state.current_player = winner
-	room.game_state.turns.start_at(winner, room.members.size())
-	room.phase = "playing"
+	room.rps_winner = -1 if outcome < 0 else (int(room.rps_players[0]) if outcome == 0 else int(room.rps_players[1]))
+	if room.rps_winner >= 0:
+		room.game_state.current_player = int(room.rps_winner)
+		room.game_state.turns.start_at(int(room.rps_winner), room.members.size())
+	room.phase = "rps_result"
 	_broadcast_rps_state(room)
-	_broadcast_turn(room)
+
+func _continue_rps(peer_id: int) -> void:
+	var room = _room_for_peer(peer_id)
+	if room == null or room.phase != "rps_result":
+		_reject(peer_id, "The tiebreak result is not waiting for confirmation.")
+		return
+	if peer_id != int(room.host_peer):
+		_reject(peer_id, "Only the host can continue from the tiebreak result.")
+		return
+	if int(room.rps_winner) >= 0:
+		room.phase = "playing"
+		_broadcast_turn(room)
+		return
+	room.phase = "rps_tiebreak"
+	room.rps_round = int(room.rps_round) + 1
+	room.rps_choices.clear()
+	for player_index in room.rps_players:
+		if bool(room.members[player_index].is_bot):
+			room.rps_choices[str(player_index)] = rng.randi_range(0, 2)
+	_broadcast_rps_state(room)
+	if room.rps_choices.size() == room.rps_players.size():
+		_resolve_rps(room)
 
 func _broadcast_rps_state(room: Dictionary) -> void:
 	_broadcast(room, Protocol.RPS_STATE, {
 		"phase": room.phase,
 		"players": room.rps_players.duplicate(),
 		"choices": room.rps_choices.duplicate(true),
-		"round": room.rps_round
+		"round": room.rps_round,
+		"winner": int(room.rps_winner)
 	})
 
 func _rps_winner(first: int, second: int) -> int:

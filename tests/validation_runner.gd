@@ -35,6 +35,7 @@ func _ready() -> void:
 	_test_suit_selection_helpers()
 	_test_card_hover_visuals()
 	_test_table_presentation()
+	_test_lobby_visual_styles()
 	_test_bot_combinations()
 	_test_server_ready_authority()
 	_test_server_seat_swaps()
@@ -732,7 +733,8 @@ func _test_table_presentation() -> void:
 		var layout: Dictionary = TableLayoutScript.layout_for_viewport(viewport_size)
 		var table_rect: Rect2 = layout.table_zone
 		_check(table_rect.size.x == table_rect.size.y and table_rect.position.x >= layout.canvas_origin.x, "square table fits centered at viewport %s" % viewport_size)
-	_check(TablePresentationScript.TABLE_TEXTURE.get_width() > TablePresentationScript.TABLE_TEXTURE.get_height(), "new table art is aspect-fitted as a landscape source inside the square zone")
+	var square_table: AtlasTexture = TablePresentationScript.table_square_texture()
+	_check(TablePresentationScript.TABLE_SOURCE.get_width() > TablePresentationScript.TABLE_SOURCE.get_height() and is_equal_approx(square_table.get_width(), square_table.get_height()), "landscape room art is cropped to a centered square table texture")
 	var two_seats := TablePresentationScript.normalized_seat_positions(2)
 	_check(two_seats[0].is_equal_approx(Vector2(0.5, 0.9)) and two_seats[1].is_equal_approx(Vector2(0.5, 0.1)), "two-player seating places the opponent North of local South")
 	var three_seats := TablePresentationScript.normalized_seat_positions(3)
@@ -799,6 +801,46 @@ func _test_table_presentation() -> void:
 		_check(cluster.get_child_count() == combination.cards.size() and overlapped, "%s renders as a rotated overlapping center cluster" % combination.name)
 		pile.free()
 
+func _test_lobby_visual_styles() -> void:
+	var flow: Control = MultiplayerFlowScript.new()
+	flow.page = "lobby"
+	flow.is_host = true
+	flow.local_player_index = 0
+	flow.room_code = "ABC123"
+	flow.match_round_limit = 8
+	flow.room_max_players = 4
+	flow.lobby_human_count = 1
+	flow.lobby_ready_count = 1
+	flow.lobby_all_ready = false
+	flow.room_players = [{"peer_id": 100, "player_index": 0, "name": "Host", "is_host": true, "ready": true}]
+	add_child(flow)
+	flow._show_lobby()
+	var heading := flow.find_children("*", "Label", true, false)
+	var heading_is_dark := false
+	for item in heading:
+		if item is Label and (item as Label).text == "Room Lobby":
+			heading_is_dark = (item as Label).get_theme_color("font_color") == Color("#111111")
+	_check(heading_is_dark, "lobby heading uses near-black text")
+	var ready_button := flow.find_child("Action_Ready", true, false) as Button
+	var ready_style := ready_button.get_theme_stylebox("normal") as StyleBoxFlat
+	_check(ready_style.bg_color == Color("#b3261e") and ready_button.get_theme_color("font_color") == Color.WHITE, "Ready button uses red background and white text")
+	var start_button := flow.find_child("Action_StartGame", true, false) as Button
+	var disabled_style := start_button.get_theme_stylebox("disabled") as StyleBoxFlat
+	_check(start_button.disabled and disabled_style.bg_color == Color("#777777") and start_button.get_theme_color("font_disabled_color") == Color("#f1f1ee"), "disabled Start Game remains readable on muted gray")
+	start_button.disabled = false
+	flow._style_lobby_controls(flow)
+	var start_style := start_button.get_theme_stylebox("normal") as StyleBoxFlat
+	_check(start_style.bg_color == Color("#176b3a") and start_button.get_theme_color("font_color") == Color.WHITE, "enabled Start Game uses dark green and white text")
+	var copy_button := flow.find_child("CopyRoomCodeButton", true, false) as Button
+	var copy_style := copy_button.get_theme_stylebox("normal") as StyleBoxFlat
+	_check(copy_style.bg_color == Color("#30343a") and copy_button.text == "Copy", "Copy button stays charcoal without changing its label")
+	var leave_button := flow.find_child("Action_LeaveRoom", true, false) as Button
+	var leave_style := leave_button.get_theme_stylebox("normal") as StyleBoxFlat
+	_check(leave_style.bg_color == Color("#791e1e") and leave_button.get_theme_color("font_color") == Color.WHITE, "Leave Room uses dark red and white text")
+	var ready_label := flow.find_child("LobbyReadyState", true, false) as Label
+	_check(ready_label.get_theme_color("font_color") == Color("#23723b"), "Ready player state uses clear green text")
+	flow.free()
+
 func _test_bot_combinations() -> void:
 	var rules = GameRulesScript.new()
 	var bot = BotBrainScript.new()
@@ -849,12 +891,16 @@ func _test_room_round(count: int) -> void:
 	for member in room.members:
 		member.is_bot = true
 		member.peer_id = 0
-	while room.phase == "rps_tiebreak":
-		for player_index in room.rps_players:
-			var choice_key := str(player_index)
-			if not room.rps_choices.has(choice_key):
-				room.rps_choices[choice_key] = 0
-		service._resolve_rps(room)
+	while room.phase in ["rps_tiebreak", "rps_result"]:
+		if room.phase == "rps_result":
+			_check(room.game_state.current_player == int(room.rps_winner) if int(room.rps_winner) >= 0 else room.game_state.current_player >= 0, "RPS result holds the authoritative starter until continue")
+			service.handle_message(peer, {"type":Protocol.CONTINUE_RPS, "payload":{}})
+		else:
+			for player_index in room.rps_players:
+				var choice_key := str(player_index)
+				if not room.rps_choices.has(choice_key):
+					room.rps_choices[choice_key] = 0
+			service._resolve_rps(room)
 	var guard := 0
 	while room.phase == "playing" and guard < 10000:
 		service.tick(0.5)

@@ -2,7 +2,8 @@ extends Control
 
 const CardViewScript = preload("res://scripts/ui/card_view.gd")
 const TableLayoutScript = preload("res://scripts/ui/table_layout.gd")
-const TABLE_TEXTURE = preload("res://assets/background/table1-8.png")
+const TABLE_SOURCE = preload("res://assets/background/table1-8.png")
+static var _TABLE_SQUARE: AtlasTexture
 const KING_TEXTURE = preload("res://assets/gadget/king.png")
 const QUEEN_TEXTURE = preload("res://assets/gadget/queen.png")
 const SEVEN_TEXTURE = preload("res://assets/gadget/se7en.png")
@@ -49,7 +50,7 @@ func _ready() -> void:
 func _build_table_artwork() -> void:
 	table_artwork = TextureRect.new()
 	table_artwork.name = "TableArtwork"
-	table_artwork.texture = TABLE_TEXTURE
+	table_artwork.texture = table_square_texture()
 	table_artwork.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	table_artwork.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	table_artwork.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -257,6 +258,16 @@ func _ensure_seats(count: int) -> void:
 		detail_labels.append(details)
 		status_labels.append(status)
 	_layout_seats()
+
+static func table_square_texture() -> AtlasTexture:
+	if _TABLE_SQUARE != null:
+		return _TABLE_SQUARE
+	var source_size := TABLE_SOURCE.get_size()
+	var crop_size := minf(source_size.x, source_size.y) * 0.82
+	_TABLE_SQUARE = AtlasTexture.new()
+	_TABLE_SQUARE.atlas = TABLE_SOURCE
+	_TABLE_SQUARE.region = Rect2((source_size.x - crop_size) * 0.5, (source_size.y - crop_size) * 0.5, crop_size, crop_size)
+	return _TABLE_SQUARE
 
 static func rps_texture(choice: int) -> AtlasTexture:
 	var cropped := AtlasTexture.new()
