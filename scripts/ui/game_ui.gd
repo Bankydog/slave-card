@@ -168,19 +168,38 @@ func _start_local_round() -> void:
 	_refresh()
 
 func _show_local_rps() -> void:
+	_clear_preserving_timer()
 	set_game_background(player_count)
 	var root := VBoxContainer.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.alignment = BoxContainer.ALIGNMENT_CENTER
-	root.add_theme_constant_override("separation", roundi(16.0 * _display_scale()))
+	root.add_theme_constant_override("separation", roundi(10.0 * _display_scale()))
 	add_child(root)
 	var heading := Label.new()
 	heading.text = local_rps_message if not local_rps_message.is_empty() else "Two players hold 3♣. Choose a card:"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(heading)
+	var held_cards := HBoxContainer.new()
+	held_cards.alignment = BoxContainer.ALIGNMENT_CENTER
+	held_cards.add_theme_constant_override("separation", roundi(30.0 * _display_scale()))
+	root.add_child(held_cards)
+	for player_index in local_rps_players:
+		var holder := VBoxContainer.new()
+		holder.alignment = BoxContainer.ALIGNMENT_CENTER
+		held_cards.add_child(holder)
+		var back := TextureRect.new()
+		back.texture = TablePresentationScript.rps_back_texture()
+		back.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		back.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		back.custom_minimum_size = Vector2(56.0, 78.0) * _display_scale()
+		holder.add_child(back)
+		var holder_label := Label.new()
+		holder_label.text = "You" if player_index == 0 else str(state.players[player_index].name)
+		holder_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		holder.add_child(holder_label)
 	var options := HBoxContainer.new()
 	options.alignment = BoxContainer.ALIGNMENT_CENTER
-	options.add_theme_constant_override("separation", roundi(14.0 * _display_scale()))
+	options.add_theme_constant_override("separation", roundi(8.0 * _display_scale()))
 	root.add_child(options)
 	var choice_names := ["Rock", "Paper", "Scissors"]
 	for choice in range(choice_names.size()):
@@ -191,25 +210,87 @@ func _show_local_rps() -> void:
 		pick.texture_normal = TablePresentationScript.rps_texture(choice)
 		pick.ignore_texture_size = true
 		pick.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
-		pick.custom_minimum_size = Vector2(150.0, 210.0) * _display_scale()
+		pick.custom_minimum_size = Vector2(76.0, 106.0) * _display_scale()
 		pick.pressed.connect(_choose_local_rps.bind(choice))
-		pick.pressed.connect(SfxManager.play_ui_click)
 		column.add_child(pick)
 		var caption := Label.new()
 		caption.text = choice_names[choice]
 		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		column.add_child(caption)
 
+func _clear_preserving_timer() -> void:
+	for child in get_children():
+		if child == multiplayer_flow or child == table_background or child == bot_timer:
+			continue
+		remove_child(child)
+		child.queue_free()
+
 func _choose_local_rps(human_choice: int) -> void:
 	var opponent := int(local_rps_players[1]) if int(local_rps_players[0]) == 0 else int(local_rps_players[0])
 	var bot_choice: int = state.rng.randi_range(0, 2)
 	var result := _rps_winner(human_choice, bot_choice)
+	await _animate_local_rps_reveal(human_choice, bot_choice)
 	if result < 0:
 		local_rps_round += 1
 		local_rps_message = "Tie! Choose again (round %d)." % local_rps_round
 		_show_local_rps()
 		return
 	_finish_local_rps(0 if result == 0 else opponent)
+
+func _animate_local_rps_reveal(human_choice: int, bot_choice: int) -> void:
+	_clear_preserving_timer()
+	set_game_background(player_count)
+	var root := VBoxContainer.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.alignment = BoxContainer.ALIGNMENT_CENTER
+	root.add_theme_constant_override("separation", roundi(8.0 * _display_scale()))
+	add_child(root)
+	var heading := Label.new()
+	heading.text = "Rock · Paper · Scissors"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(heading)
+	var cards := HBoxContainer.new()
+	cards.alignment = BoxContainer.ALIGNMENT_CENTER
+	cards.add_theme_constant_override("separation", roundi(36.0 * _display_scale()))
+	root.add_child(cards)
+	var faces: Array[TextureRect] = []
+	for player_index in local_rps_players:
+		var holder := VBoxContainer.new()
+		holder.alignment = BoxContainer.ALIGNMENT_CENTER
+		cards.add_child(holder)
+		var face := TextureRect.new()
+		face.texture = TablePresentationScript.rps_back_texture()
+		face.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		face.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		face.custom_minimum_size = Vector2(92.0, 128.0) * _display_scale()
+		face.pivot_offset = face.custom_minimum_size * 0.5
+		holder.add_child(face)
+		faces.append(face)
+		var label := Label.new()
+		label.text = "You" if player_index == 0 else str(state.players[player_index].name)
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		holder.add_child(label)
+	var first_choice := human_choice if local_rps_players[0] == 0 else bot_choice
+	var second_choice := bot_choice if local_rps_players[1] != 0 else human_choice
+	var tween := create_tween()
+	tween.tween_interval(0.1)
+	tween.set_parallel(true)
+	for face in faces:
+		tween.tween_property(face, "scale:x", 0.0, 0.1).set_trans(Tween.TRANS_CUBIC)
+	tween.set_parallel(false)
+	tween.tween_callback(func():
+		faces[0].texture = TablePresentationScript.rps_texture(first_choice)
+		faces[1].texture = TablePresentationScript.rps_texture(second_choice)
+	)
+	tween.set_parallel(true)
+	for face in faces:
+		tween.tween_property(face, "scale:x", 1.0, 0.15).set_trans(Tween.TRANS_CUBIC)
+	await tween.finished
+	if not is_inside_tree():
+		return
+	if _rps_winner(first_choice, second_choice) < 0:
+		heading.text = "Tie"
+		await get_tree().create_timer(0.35).timeout
 
 func _local_bot_rps_winner() -> int:
 	while true:
@@ -230,6 +311,7 @@ func _finish_local_rps(winner: int) -> void:
 	state.turns.start_at(winner, player_count)
 	local_rps_players.clear()
 	local_rps_message = ""
+	_clear_preserving_timer()
 	_build_table()
 	_refresh()
 
@@ -364,12 +446,12 @@ func _refresh_local_exchange() -> void:
 func _toggle_local_exchange_card(card: CardData) -> void:
 	if local_exchange.is_slave_participant(0):
 		return
-	SfxManager.play_card_select()
 	var id := card.card_id()
 	if selected_exchange_ids.has(id):
 		selected_exchange_ids.erase(id)
 	else:
 		selected_exchange_ids.append(id)
+	SfxManager.play_card_select()
 	_refresh_local_exchange()
 
 func _submit_local_exchange() -> void:
@@ -399,11 +481,11 @@ func _finish_local_round() -> void:
 	_show_results()
 
 func _toggle_play_card(card_id: String) -> void:
-	SfxManager.play_card_select()
 	if selected_card_ids.has(card_id):
 		selected_card_ids.erase(card_id)
 	else:
 		selected_card_ids.append(card_id)
+	SfxManager.play_card_select()
 	_refresh()
 
 func _play_selected() -> void:

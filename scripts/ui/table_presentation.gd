@@ -6,6 +6,7 @@ const QUEEN_TEXTURE = preload("res://assets/gadget/queen.png")
 const SEVEN_TEXTURE = preload("res://assets/gadget/se7en.png")
 const SLAVES_TEXTURE = preload("res://assets/gadget/slaves.png")
 const RPS_ATLAS = preload("res://assets/suits/SPR.png")
+const RPS_BACK = preload("res://assets/suits/back-card.png")
 const CARD_FLIP_SOUND = preload("res://assets/sound/flip-card.mp3")
 
 var seat_widgets: Array[PanelContainer] = []
@@ -218,6 +219,9 @@ static func rps_texture(choice: int) -> AtlasTexture:
 	var cell_width := float(RPS_ATLAS.get_width()) / 3.0
 	cropped.region = Rect2(cell_width * clampi(choice, 0, 2), 0.0, cell_width, float(RPS_ATLAS.get_height()))
 	return cropped
+
+static func rps_back_texture() -> Texture2D:
+	return RPS_BACK
 
 static func make_role_summary_row(role: String, line: Label, scale: float) -> HBoxContainer:
 	var row := HBoxContainer.new()

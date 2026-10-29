@@ -34,6 +34,8 @@ var online_phase := "lobby"
 var rps_players: Array = []
 var rps_choices: Dictionary = {}
 var rps_round := 1
+var online_rps_reveal_active := false
+var queued_turn_snapshot: Dictionary = {}
 var online_players: Array = []
 var online_hand: Array[CardData] = []
 var online_rules := GameRulesScript.new()
@@ -495,9 +497,28 @@ func _show_online_rps(root: Control) -> void:
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	heading.text = "Two players hold 3♣ · choose rock, paper, or scissors" if rps_round <= 1 else "Tie · choose again (round %d)" % rps_round
 	root.add_child(heading)
+	var held_cards := HBoxContainer.new()
+	held_cards.alignment = BoxContainer.ALIGNMENT_CENTER
+	held_cards.add_theme_constant_override("separation", roundi(24.0 * _display_scale()))
+	root.add_child(held_cards)
+	for player_index_value in rps_players:
+		var player_index := int(player_index_value)
+		var holder := VBoxContainer.new()
+		holder.alignment = BoxContainer.ALIGNMENT_CENTER
+		held_cards.add_child(holder)
+		var back := TextureRect.new()
+		back.texture = TablePresentationScript.rps_back_texture()
+		back.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		back.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		back.custom_minimum_size = Vector2(60.0, 84.0) * _display_scale()
+		holder.add_child(back)
+		var holder_label := Label.new()
+		holder_label.text = "You" if player_index == online_player_index else str(online_players[player_index].get("name", "Opponent")) if player_index < online_players.size() else "Opponent"
+		holder_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		holder.add_child(holder_label)
 	var choices := HBoxContainer.new()
 	choices.alignment = BoxContainer.ALIGNMENT_CENTER
-	choices.add_theme_constant_override("separation", roundi(12.0 * _display_scale()))
+	choices.add_theme_constant_override("separation", roundi(8.0 * _display_scale()))
 	root.add_child(choices)
 	var local_is_tied := rps_players.has(online_player_index)
 	var already_chosen := rps_choices.has(str(online_player_index))
@@ -507,7 +528,7 @@ func _show_online_rps(root: Control) -> void:
 			button.texture_normal = TablePresentationScript.rps_texture(choice)
 			button.ignore_texture_size = true
 			button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
-			button.custom_minimum_size = Vector2(110.0, 154.0) * _display_scale()
+			button.custom_minimum_size = Vector2(72.0, 100.0) * _display_scale()
 			button.pressed.connect(_select_rps_choice.bind(choice))
 			choices.add_child(button)
 	else:
@@ -515,6 +536,65 @@ func _show_online_rps(root: Control) -> void:
 		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		waiting.text = "Your choice is locked. Waiting for the other player..." if already_chosen else "Waiting for the tied players to choose..."
 		root.add_child(waiting)
+
+func _reveal_online_rps() -> void:
+	if online_rps_reveal_active:
+		return
+	online_rps_reveal_active = true
+	var choices_snapshot := rps_choices.duplicate(true)
+	var players_snapshot := rps_players.duplicate()
+	var root := _root_box("3♣ Tie Break")
+	var heading := Label.new()
+	heading.text = "Rock · Paper · Scissors"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(heading)
+	var cards := HBoxContainer.new()
+	cards.alignment = BoxContainer.ALIGNMENT_CENTER
+	cards.add_theme_constant_override("separation", roundi(30.0 * _display_scale()))
+	root.add_child(cards)
+	var faces: Array[TextureRect] = []
+	var revealed_textures: Array[Texture2D] = []
+	for player_value in players_snapshot:
+		var player_index := int(player_value)
+		var holder := VBoxContainer.new()
+		holder.alignment = BoxContainer.ALIGNMENT_CENTER
+		cards.add_child(holder)
+		var face := TextureRect.new()
+		face.texture = TablePresentationScript.rps_back_texture()
+		face.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		face.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		face.custom_minimum_size = Vector2(92.0, 128.0) * _display_scale()
+		holder.add_child(face)
+		faces.append(face)
+		var choice := int(choices_snapshot.get(str(player_index), 0))
+		revealed_textures.append(TablePresentationScript.rps_texture(choice))
+		var player_name := str(online_players[player_index].get("name", "Player %d" % (player_index + 1))) if player_index < online_players.size() else "Player %d" % (player_index + 1)
+		var label := Label.new()
+		label.text = "You" if player_index == online_player_index else player_name
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		holder.add_child(label)
+	var tween := create_tween()
+	tween.tween_interval(0.1)
+	tween.set_parallel(true)
+	for face in faces:
+		tween.tween_property(face, "scale:x", 0.0, 0.1).set_trans(Tween.TRANS_CUBIC)
+	tween.set_parallel(false)
+	tween.tween_callback(func():
+		for i in range(faces.size()):
+			faces[i].texture = revealed_textures[i]
+	)
+	tween.set_parallel(true)
+	for face in faces:
+		tween.tween_property(face, "scale:x", 1.0, 0.15).set_trans(Tween.TRANS_CUBIC)
+	await tween.finished
+	online_rps_reveal_active = false
+	if not queued_turn_snapshot.is_empty():
+		online_snapshot = queued_turn_snapshot
+		queued_turn_snapshot.clear()
+		online_phase = str(online_snapshot.get("phase", "playing"))
+		online_players = online_snapshot.get("players", online_players)
+		if page == "game":
+			_show_online_game()
 
 func _select_rps_choice(choice: int) -> void:
 	_send_request(Protocol.SELECT_RPS, {"choice": choice})
@@ -674,8 +754,14 @@ func _on_server_message(message: Dictionary) -> void:
 			rps_round = int(payload.get("round", rps_round))
 			online_phase = str(payload.get("phase", online_phase))
 			if page == "game":
-				_show_online_game()
+				if online_phase == "playing" and rps_choices.size() >= rps_players.size() and not rps_players.is_empty():
+					_reveal_online_rps()
+				else:
+					_show_online_game()
 		Protocol.TURN_CHANGED:
+			if online_rps_reveal_active:
+				queued_turn_snapshot = payload.duplicate(true)
+				return
 			online_snapshot = payload
 			online_phase = str(payload.get("phase", online_phase))
 			online_players = payload.get("players", online_players)
@@ -723,11 +809,11 @@ func _submit_exchange() -> void:
 func _toggle_card(card_id: String) -> void:
 	if online_phase == "card_exchange" and (exchange_role.begins_with("Slave ") or _trade_is_ready(exchange_role)):
 		return
-	SfxManager.play_card_select()
 	if selected_card_ids.has(card_id):
 		selected_card_ids.erase(card_id)
 	else:
 		selected_card_ids.append(card_id)
+	SfxManager.play_card_select()
 	_show_online_game()
 
 func _leave_room() -> void:
