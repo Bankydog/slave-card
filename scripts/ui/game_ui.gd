@@ -6,6 +6,7 @@ const BotBrainScript = preload("res://scripts/ai/bot_brain.gd")
 const MultiplayerFlowScript = preload("res://scripts/ui/multiplayer_flow.gd")
 const RoleSystemScript = preload("res://scripts/game/role_system.gd")
 const CardExchangeScript = preload("res://scripts/game/card_exchange.gd")
+const MatchStateScript = preload("res://scripts/game/match_state.gd")
 const HandSorterScript = preload("res://scripts/cards/hand_sorter.gd")
 const TablePresentationScript = preload("res://scripts/ui/table_presentation.gd")
 const TITLE_TEXTURE = preload("res://assets/idle/title.png")
@@ -25,6 +26,8 @@ var buttons_box: HBoxContainer
 var deck_info_label: Label
 var multiplayer_flow: Control
 var local_roles_by_player: Dictionary = {}
+var match_progress = MatchStateScript.new()
+var selected_match_round_limit := 4
 var local_exchange
 var local_phase := "playing"
 var local_round_number := 0
@@ -95,8 +98,25 @@ func _build_menu() -> void:
 	deck_info_label.name = "DeckInfo"
 	deck_info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(deck_info_label)
+	var match_row := HBoxContainer.new()
+	match_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	match_row.add_theme_constant_override("separation", roundi(8.0 * _display_scale()))
+	var rounds_label := Label.new()
+	rounds_label.text = "Rounds"
+	rounds_label.custom_minimum_size.x = 76.0 * _display_scale()
+	rounds_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	match_row.add_child(rounds_label)
+	for round_limit in MatchStateScript.ALLOWED_ROUND_LIMITS:
+		var round_button := Button.new()
+		round_button.text = str(round_limit)
+		round_button.toggle_mode = true
+		round_button.button_pressed = round_limit == selected_match_round_limit
+		round_button.custom_minimum_size = Vector2(64.0, 48.0) * _display_scale()
+		round_button.pressed.connect(_select_match_round_limit.bind(round_limit))
+		match_row.add_child(round_button)
+	root.add_child(match_row)
 	var start := Button.new()
-	start.text = "Start Game"
+	start.text = "Start Match"
 	start.custom_minimum_size = Vector2(200, 58) * _display_scale()
 	start.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	start.pressed.connect(_start_game)
@@ -109,6 +129,12 @@ func _build_menu() -> void:
 	root.add_child(back)
 	_update_menu_count(count_value)
 	_enforce_text_minimum(root)
+
+func _select_match_round_limit(round_limit: int) -> void:
+	if not MatchStateScript.ALLOWED_ROUND_LIMITS.has(round_limit):
+		return
+	selected_match_round_limit = round_limit
+	_build_menu()
 
 func _adjust_player_count(delta: int, value: Label) -> void:
 	player_count = clampi(player_count + delta, 2, 12)
@@ -123,12 +149,18 @@ func _start_game() -> void:
 	local_roles_by_player.clear()
 	local_round_number = 0
 	next_round_starter = -1
+	previous_king_demoted = false
+	match_progress.begin(player_count, selected_match_round_limit)
 	_start_local_round()
 
 func _start_local_round() -> void:
+	if match_progress.current_round >= match_progress.match_round_limit:
+		return
+	if not match_progress.advance_round():
+		return
 	SfxManager.play_shuffle()
 	_clear()
-	local_round_number += 1
+	local_round_number = match_progress.current_round
 	state = GameStateScript.new()
 	state.changed.connect(_refresh)
 	var round_starter := next_round_starter
@@ -387,7 +419,7 @@ func _refresh() -> void:
 	buttons_box.get_node("PassButton").show()
 	buttons_box.get_node("ExchangeButton").hide()
 	var current = state.players[state.current_player]
-	title_label.text = "YOUR TURN" if current.is_human else "%s is thinking…" % current.name
+	title_label.text = "Round %d / %d  ·  %s" % [match_progress.current_round, match_progress.match_round_limit, "YOUR TURN" if current.is_human else "%s is thinking…" % current.name]
 	var center_text := "Lead a combination"
 	if not state.current_cards.is_empty():
 		center_text = "%s · %s" % [str(state.current_combination.get("type", "Play")), str(state.players[state.last_player].name)]
@@ -412,7 +444,7 @@ func _refresh() -> void:
 		bot_timer.start(0.8)
 
 func _refresh_local_exchange() -> void:
-	title_label.text = "Card Exchange  ·  Round %d" % local_round_number
+	title_label.text = "Round %d / %d  ·  Card Exchange" % [match_progress.current_round, match_progress.match_round_limit]
 	var amount: int = local_exchange.pending_amount_for(0)
 	var role: String = local_exchange.role_for_player(0)
 	var is_slave: bool = local_exchange.is_slave_participant(0)
@@ -469,6 +501,9 @@ func _submit_local_exchange() -> void:
 	_refresh()
 
 func _finish_local_round() -> void:
+	var score_result: Dictionary = match_progress.record_round(state.finishing_order)
+	if not score_result.ok:
+		return
 	var result: Dictionary = RoleSystemScript.resolve(state.finishing_order, state.players.size(), local_roles_by_player)
 	if not result.ok:
 		return
@@ -518,26 +553,39 @@ func _bot_move() -> void:
 		state.play_cards(state.current_player, cards)
 
 func _show_results() -> void:
+	if match_progress.current_round >= match_progress.match_round_limit:
+		_show_final_match_result()
+		return
 	_clear()
 	set_game_background(player_count)
 	var root := VBoxContainer.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.alignment = BoxContainer.ALIGNMENT_CENTER
-	root.add_theme_constant_override("separation", roundi((8.0 if _is_compact_view() else 12.0) * _display_scale()))
+	root.add_theme_constant_override("separation", roundi((4.0 if _is_compact_view() else 10.0) * _display_scale()))
 	add_child(root)
 	var heading := Label.new()
-	heading.text = "Round %d Results" % local_round_number
+	heading.text = "Round %d / %d Results" % [match_progress.current_round, match_progress.match_round_limit]
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	heading.add_theme_font_size_override("font_size", 30)
+	heading.add_theme_font_size_override("font_size", maxi(18, roundi(26.0 * _display_scale())))
 	root.add_child(heading)
+	var score_list := ScrollContainer.new()
+	score_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	score_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	score_list.custom_minimum_size.y = 120.0 if _is_compact_view() else 250.0
+	var rows := VBoxContainer.new()
+	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rows.add_theme_constant_override("separation", roundi(4.0 * _display_scale()))
+	score_list.add_child(rows)
+	root.add_child(score_list)
 	for place in range(state.finishing_order.size()):
 		var player_index: int = state.finishing_order[place]
 		var player = state.players[player_index]
 		var role := str(local_roles_by_player.get(player_index, "%d%s" % [place + 1, _ordinal_suffix(place + 1)]))
-		var line := Label.new()
-		line.text = "%s  —  %s" % [role, player.name]
-		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		root.add_child(TablePresentationScript.make_role_summary_row(role, line, _display_scale()))
+		var row := Label.new()
+		row.text = "%d. %s  +%d  Total %d  ·  %s" % [place + 1, player.name, match_progress.round_history.back().round_points[player_index], match_progress.match_scores[player_index], role]
+		row.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rows.add_child(row)
 	if previous_king_demoted:
 		var demotion := Label.new()
 		demotion.text = "The previous King is now Slave 1."
@@ -556,14 +604,59 @@ func _show_results() -> void:
 	trade_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(trade_notice)
 	var next_round := Button.new()
-	next_round.text = "Next Round · Card Trade"
-	next_round.custom_minimum_size = Vector2(200, 56) * _display_scale()
+	next_round.text = "Next Round"
+	next_round.custom_minimum_size = Vector2(200, 52) * _display_scale()
 	next_round.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	next_round.pressed.connect(_start_local_round)
 	root.add_child(next_round)
 	var menu := Button.new()
 	menu.text = "Main Menu"
-	menu.custom_minimum_size = Vector2(180, 52) * _display_scale()
+	menu.custom_minimum_size = Vector2(180, 48) * _display_scale()
+	menu.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	menu.pressed.connect(_return_to_main_menu)
+	root.add_child(menu)
+	_enforce_text_minimum(root)
+
+func _show_final_match_result() -> void:
+	_clear()
+	set_game_background(player_count)
+	var root := VBoxContainer.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_theme_constant_override("separation", roundi(6.0 * _display_scale()))
+	add_child(root)
+	var heading := Label.new()
+	heading.text = "Final Result — %d Rounds" % match_progress.match_round_limit
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", maxi(20, roundi(28.0 * _display_scale())))
+	root.add_child(heading)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var rows := VBoxContainer.new()
+	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rows.add_theme_constant_override("separation", roundi(4.0 * _display_scale()))
+	scroll.add_child(rows)
+	root.add_child(scroll)
+	var ranking := match_progress.ranked_player_indices()
+	for place in range(ranking.size()):
+		var player_index := ranking[place]
+		var row := Label.new()
+		row.text = "%d. %s  ·  Score %d  ·  1st %d  ·  2nd %d" % [place + 1, state.players[player_index].name, match_progress.match_scores[player_index], match_progress.first_place_counts[player_index], match_progress.second_place_counts[player_index]]
+		row.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		if place == 0:
+			row.add_theme_color_override("font_color", Color("#f3d78b"))
+			row.add_theme_font_size_override("font_size", maxi(18, roundi(24.0 * _display_scale())))
+		rows.add_child(row)
+	var rematch := Button.new()
+	rematch.text = "Rematch"
+	rematch.custom_minimum_size = Vector2(180.0, 48.0) * _display_scale()
+	rematch.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	rematch.pressed.connect(_start_game)
+	root.add_child(rematch)
+	var menu := Button.new()
+	menu.text = "Back to Main Menu"
+	menu.custom_minimum_size = Vector2(200.0, 48.0) * _display_scale()
 	menu.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	menu.pressed.connect(_return_to_main_menu)
 	root.add_child(menu)

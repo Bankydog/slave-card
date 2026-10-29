@@ -7,6 +7,7 @@ const GameStateScript = preload("res://scripts/game/game_state.gd")
 const BotBrainScript = preload("res://scripts/ai/bot_brain.gd")
 const RoleSystemScript = preload("res://scripts/game/role_system.gd")
 const CardExchangeScript = preload("res://scripts/game/card_exchange.gd")
+const MatchStateScript = preload("res://scripts/game/match_state.gd")
 const Protocol = preload("res://scripts/network/network_protocol.gd")
 
 var rooms: Dictionary = {}
@@ -33,6 +34,8 @@ func handle_message(peer_id: int, message: Dictionary) -> void:
 			_set_ready(peer_id, payload)
 		Protocol.START_NEXT_ROUND:
 			_start_next_round(peer_id)
+		Protocol.REMATCH:
+			_rematch(peer_id)
 		Protocol.PLAY_CARDS:
 			_play_cards(peer_id, payload)
 		Protocol.PASS:
@@ -79,6 +82,10 @@ func _create_room(peer_id: int, payload: Dictionary) -> void:
 		_reject(peer_id, "Leave your current room first.")
 		return
 	var max_players := clampi(int(payload.get("max_players", 8)), 2, 12)
+	var match_round_limit := int(payload.get("match_round_limit", 4))
+	if not MatchStateScript.ALLOWED_ROUND_LIMITS.has(match_round_limit):
+		_reject(peer_id, "Match length must be 4, 8, or 12 rounds.")
+		return
 	var code := _new_room_code()
 	var name := _guest_name(str(payload.get("name", "")))
 	var member := {"peer_id": peer_id, "name": name, "is_bot": false, "ready": false}
@@ -89,6 +96,8 @@ func _create_room(peer_id: int, payload: Dictionary) -> void:
 		"members": [member],
 		"phase": "lobby",
 		"round_number": 0,
+		"match_round_limit": match_round_limit,
+		"match_state": MatchStateScript.new(),
 		"roles_by_player": {},
 		"game_state": null,
 		"exchange": null,
@@ -100,7 +109,7 @@ func _create_room(peer_id: int, payload: Dictionary) -> void:
 	}
 	rooms[code] = room
 	room_by_peer[peer_id] = code
-	_send(peer_id, Protocol.ROOM_CREATED, {"room_code": code, "max_players": max_players, "host": true})
+	_send(peer_id, Protocol.ROOM_CREATED, {"room_code": code, "max_players": max_players, "match_round_limit": match_round_limit, "host": true})
 	_broadcast_lobby(room)
 
 func _join_room(peer_id: int, payload: Dictionary) -> void:
@@ -181,7 +190,41 @@ func _start_game(peer_id: int, payload: Dictionary) -> void:
 		while room.members.size() < int(room.max_players):
 			room.members.append({"peer_id": 0, "name": "Bot %d" % next_bot_name, "is_bot": true, "ready": true})
 			next_bot_name += 1
+	if not room.match_state.begin(final_count, int(room.match_round_limit)):
+		_reject(peer_id, "The match configuration is invalid.")
+		return
+	room.round_number = 0
+	room.roles_by_player.clear()
+	for member in room.members:
+		member["role"] = ""
 	_start_round(room)
+
+func _rematch(peer_id: int) -> void:
+	var room = _room_for_peer(peer_id)
+	if room == null:
+		_reject(peer_id, "You are not in a room.")
+		return
+	if int(room.host_peer) != peer_id:
+		_reject(peer_id, "Only the host can request a rematch.")
+		return
+	if room.phase != "match_finished":
+		_reject(peer_id, "A rematch is only available after the match finishes.")
+		return
+	room.phase = "lobby"
+	room.round_number = 0
+	room.match_state.begin(room.members.size(), int(room.match_round_limit))
+	room.roles_by_player.clear()
+	room.game_state = null
+	room.exchange = null
+	room.rps_players = []
+	room.rps_choices = {}
+	room.rps_round = 1
+	room.last_finished_count = 0
+	room.bot_delay = 0.0
+	for member in room.members:
+		member["ready"] = bool(member.get("is_bot", false))
+		member["role"] = ""
+	_broadcast_lobby(room)
 
 func _set_ready(peer_id: int, payload: Dictionary) -> void:
 	var room = _room_for_peer(peer_id)
@@ -212,14 +255,21 @@ func _start_next_round(peer_id: int) -> void:
 	if room.phase != "results":
 		_reject(peer_id, "The previous round has not finished.")
 		return
+	if int(room.match_state.current_round) >= int(room.match_round_limit):
+		_reject(peer_id, "The match is already complete.")
+		return
 	_start_round(room)
 
 func _start_round(room: Dictionary) -> void:
+	if int(room.match_state.current_round) >= int(room.match_round_limit):
+		return
 	var round_starter := -1
 	var previous_game = room.game_state
-	if previous_game != null and not previous_game.finishing_order.is_empty():
+	if int(room.match_state.current_round) > 0 and previous_game != null and not previous_game.finishing_order.is_empty():
 		round_starter = previous_game.finishing_order[0]
-	room.round_number = int(room.round_number) + 1
+	if not room.match_state.advance_round():
+		return
+	room.round_number = int(room.match_state.current_round)
 	room.game_state = GameStateScript.new()
 	room.game_state.start(room.members.size(), 0, round_starter)
 	for i in range(room.members.size()):
@@ -260,6 +310,8 @@ func _start_round(room: Dictionary) -> void:
 	_broadcast(room, Protocol.START_GAME, {
 		"room_code": room.code,
 		"round_number": room.round_number,
+		"current_round": room.match_state.current_round,
+		"match_round_limit": room.match_round_limit,
 		"player_count": room.members.size(),
 		"phase": room.phase,
 		"roles_by_player": room.roles_by_player.duplicate(true),
@@ -439,6 +491,13 @@ func _after_action(room: Dictionary) -> void:
 		_finish_round(room)
 
 func _finish_round(room: Dictionary) -> void:
+	if room.phase != "playing" or room.game_state == null:
+		return
+	var match_result: Dictionary = room.match_state.record_round(room.game_state.finishing_order)
+	if not match_result.ok:
+		room.phase = "results"
+		_broadcast(room, Protocol.ACTION_REJECTED, {"reason": str(match_result.error)})
+		return
 	var resolution: Dictionary = RoleSystemScript.resolve(room.game_state.finishing_order, room.members.size(), room.roles_by_player)
 	if not resolution.ok:
 		room.phase = "results"
@@ -447,21 +506,49 @@ func _finish_round(room: Dictionary) -> void:
 	room.roles_by_player = resolution.roles_by_player
 	for i in range(room.members.size()):
 		room.members[i]["role"] = str(room.roles_by_player.get(i, ""))
-	room.phase = "results"
+	var is_final_round: bool = int(room.match_state.current_round) == int(room.match_round_limit)
+	room.phase = "match_finished" if is_final_round else "results"
 	var role_payload := {
 		"roles_by_player": room.roles_by_player.duplicate(true),
 		"previous_king_demoted": resolution.previous_king_demoted,
 		"previous_king_player": resolution.previous_king_player
 	}
 	_broadcast(room, Protocol.ROLES_ASSIGNED, role_payload)
-	_broadcast(room, Protocol.ROUND_FINISHED, {
+	var result_payload := {
 		"round_number": room.round_number,
+		"current_round": room.match_state.current_round,
+		"match_round_limit": room.match_round_limit,
 		"finishing_order": room.game_state.finishing_order.duplicate(),
+		"round_points": match_result.round_points,
+		"match_scores": match_result.match_scores,
+		"first_place_counts": match_result.first_place_counts,
+		"second_place_counts": match_result.second_place_counts,
+		"final_positions": room.match_state.final_positions.duplicate(),
 		"roles_by_player": room.roles_by_player.duplicate(true),
+		"players": _public_players(room),
 		"previous_king_demoted": resolution.previous_king_demoted,
-		"next_round_available": true
-	})
+		"next_round_available": not is_final_round
+	}
+	if is_final_round:
+		result_payload["leaderboard"] = _match_leaderboard(room)
+		_broadcast(room, Protocol.MATCH_FINISHED, result_payload)
+	else:
+		_broadcast(room, Protocol.ROUND_FINISHED, result_payload)
 	_broadcast_lobby(room)
+
+func _match_leaderboard(room: Dictionary) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for player_index in room.match_state.ranked_player_indices():
+		result.append({
+			"player_index": player_index,
+			"name": str(room.members[player_index].name),
+			"score": room.match_state.match_scores[player_index],
+			"first_place_count": room.match_state.first_place_counts[player_index],
+			"second_place_count": room.match_state.second_place_counts[player_index],
+			"final_position": room.match_state.final_positions[player_index],
+			"role": str(room.roles_by_player.get(player_index, ""))
+		})
+	return result
 
 func _send_deals(room: Dictionary) -> void:
 	for i in range(room.members.size()):
@@ -476,6 +563,11 @@ func _send_deals(room: Dictionary) -> void:
 			"player_index": i,
 			"player_count": room.members.size(),
 			"round_number": room.round_number,
+			"current_round": room.match_state.current_round,
+			"match_round_limit": room.match_round_limit,
+			"match_scores": room.match_state.match_scores.duplicate(),
+			"first_place_counts": room.match_state.first_place_counts.duplicate(),
+			"second_place_counts": room.match_state.second_place_counts.duplicate(),
 			"phase": room.phase,
 			"rps_players": room.rps_players.duplicate(),
 			"rps_choices": room.rps_choices.duplicate(true),
@@ -517,6 +609,11 @@ func _public_turn(room: Dictionary) -> Dictionary:
 	return {
 		"room_code": room.code,
 		"round_number": room.round_number,
+		"current_round": room.match_state.current_round,
+		"match_round_limit": room.match_round_limit,
+		"match_scores": room.match_state.match_scores.duplicate(),
+		"first_place_counts": room.match_state.first_place_counts.duplicate(),
+		"second_place_counts": room.match_state.second_place_counts.duplicate(),
 		"phase": room.phase,
 		"current_player": game.current_player,
 		"current_card": game.current_card.to_dict() if game.current_card != null else {},
@@ -555,6 +652,8 @@ func _broadcast_lobby(room: Dictionary) -> void:
 		"max_players": room.max_players,
 		"phase": room.phase,
 		"round_number": room.round_number,
+		"current_round": room.match_state.current_round,
+		"match_round_limit": room.match_round_limit,
 		"players": _public_players(room),
 		"ready_count": ready_count,
 		"human_count": human_count,

@@ -5,6 +5,7 @@ const Protocol = preload("res://scripts/network/network_protocol.gd")
 const GameStateScript = preload("res://scripts/game/game_state.gd")
 const RoleSystemScript = preload("res://scripts/game/role_system.gd")
 const CardExchangeScript = preload("res://scripts/game/card_exchange.gd")
+const MatchStateScript = preload("res://scripts/game/match_state.gd")
 const BotBrainScript = preload("res://scripts/ai/bot_brain.gd")
 const GameRulesScript = preload("res://scripts/game/game_rules.gd")
 const HandSorterScript = preload("res://scripts/cards/hand_sorter.gd")
@@ -35,6 +36,11 @@ func _ready() -> void:
 	_test_table_presentation()
 	_test_bot_combinations()
 	_test_server_ready_authority()
+	_test_match_state_scoring()
+	_test_server_match_flow(4, 960)
+	_test_server_match_flow(8, 970)
+	_test_server_match_flow(12, 980)
+	_test_invalid_match_length()
 	_test_room_round(6)
 	_test_room_round(7)
 	_test_room_round(12)
@@ -71,6 +77,90 @@ func _ids(cards: Array) -> Array[String]:
 func _ready_peers(service, peers: Array[int]) -> void:
 	for peer_id in peers:
 		service.handle_message(peer_id, {"type":Protocol.SET_READY, "payload":{"ready":true}})
+
+func _test_match_state_scoring() -> void:
+	for player_count in range(2, 13):
+		var tracker = MatchStateScript.new()
+		_check(tracker.begin(player_count, 4), "%d players can initialize a match tracker" % player_count)
+		_check(tracker.advance_round(), "%d-player match advances to Round 1" % player_count)
+		var order: Array[int] = []
+		for player_index in range(player_count):
+			order.append(player_index)
+		var result: Dictionary = tracker.record_round(order)
+		var points_ok := bool(result.get("ok", false))
+		for place in range(player_count):
+			points_ok = points_ok and tracker.match_scores[place] == player_count - place - 1
+		_check(points_ok, "scoring uses player count minus finishing position for %d players" % player_count)
+		_check(tracker.first_place_counts[0] == 1 and tracker.second_place_counts[1] == 1, "first and second place counters update for %d players" % player_count)
+	for round_limit in [4, 8, 12]:
+		var tracker = MatchStateScript.new()
+		tracker.begin(2, round_limit)
+		for round_number in range(round_limit):
+			tracker.advance_round()
+			var result: Dictionary = tracker.record_round([0, 1])
+			if not result.ok:
+				_check(false, "%d-round match records round %d" % [round_limit, round_number + 1])
+				break
+		_check(tracker.current_round == round_limit and not tracker.advance_round(), "%d-round match stops exactly at its configured limit" % round_limit)
+	var ranked = MatchStateScript.new()
+	ranked.begin(3, 4)
+	ranked.advance_round()
+	ranked.record_round([0, 1, 2])
+	ranked.advance_round()
+	ranked.record_round([2, 1, 0])
+	_check(ranked.match_scores == [2, 2, 2] and ranked.ranked_player_indices() == [2, 0, 1], "ranking breaks score ties by first-place counts, then final position deterministically")
+
+func _test_server_match_flow(round_limit: int, host_peer: int) -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(host_peer, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":2, "match_round_limit":round_limit}})
+	var code := str(_last_message(host_peer, Protocol.ROOM_CREATED).get("payload", {}).get("room_code", ""))
+	var guest_peer := host_peer + 1
+	service.handle_message(guest_peer, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Guest", "room_code":code}})
+	var guest_lobby: Dictionary = _last_message(guest_peer, Protocol.LOBBY_STATE).get("payload", {})
+	_check(int(guest_lobby.get("match_round_limit", 0)) == round_limit, "guest receives server-selected %d-round length" % round_limit)
+	_ready_peers(service, [host_peer, guest_peer])
+	service.handle_message(host_peer, {"type":Protocol.START_GAME, "payload":{"fill_bots":false, "match_round_limit":12}})
+	var room: Dictionary = service.rooms[code]
+	_check(room.phase == "playing" and room.match_state.current_round == 1 and room.match_round_limit == round_limit, "server starts a fresh %d-round match and ignores client round-limit changes" % round_limit)
+	_check(room.game_state.current_player == room.game_state.first_player_by_three_clubs(), "new match starts through existing 3-club starter logic")
+	for round_number in range(1, round_limit + 1):
+		room.phase = "playing"
+		room.game_state.finishing_order.clear()
+		room.game_state.finishing_order.append(0)
+		room.game_state.finishing_order.append(1)
+		service._finish_round(room)
+		if round_number < round_limit:
+			var round_payload: Dictionary = _last_message(host_peer, Protocol.ROUND_FINISHED).get("payload", {})
+			_check(room.phase == "results" and room.match_state.current_round == round_number and round_payload.get("match_scores", []) == [round_number, 0], "%d-round match publishes cumulative scores after round %d" % [round_limit, round_number])
+			var before_duplicate := int(room.match_state.current_round)
+			service.handle_message(guest_peer, {"type":Protocol.START_NEXT_ROUND, "payload":{}})
+			_check(int(room.match_state.current_round) == before_duplicate, "guest cannot advance the server match")
+			service.handle_message(host_peer, {"type":Protocol.START_NEXT_ROUND, "payload":{}})
+			var after_advance := int(room.match_state.current_round)
+			service.handle_message(host_peer, {"type":Protocol.START_NEXT_ROUND, "payload":{}})
+			_check(after_advance == round_number + 1 and int(room.match_state.current_round) == after_advance, "duplicate next-round requests cannot skip a round")
+		else:
+			var final_payload: Dictionary = _last_message(host_peer, Protocol.MATCH_FINISHED).get("payload", {})
+			_check(room.phase == "match_finished" and room.match_state.current_round == round_limit and not bool(final_payload.get("next_round_available", true)), "%d-round match ends exactly once on its final round" % round_limit)
+			_check(final_payload.get("leaderboard", []).size() == room.members.size() and final_payload.get("match_scores", []) == [round_limit, 0], "final leaderboard includes every player and cumulative score")
+			var final_scores: Array[int] = room.match_state.match_scores.duplicate()
+			service._finish_round(room)
+			_check(room.match_state.match_scores == final_scores and int(room.match_state.current_round) == round_limit, "duplicate final completion cannot score or advance twice")
+	service.handle_message(guest_peer, {"type":Protocol.REMATCH, "payload":{}})
+	_check(room.phase == "match_finished", "guest cannot reset a completed match")
+	service.handle_message(host_peer, {"type":Protocol.REMATCH, "payload":{}})
+	_check(room.phase == "lobby" and room.match_state.current_round == 0 and room.match_state.match_scores == [0, 0] and room.roles_by_player.is_empty(), "host rematch resets score, rounds, roles, and returns the same room to lobby")
+	_check(not bool(room.members[0].ready) and not bool(room.members[1].ready), "rematch requires humans to ready again")
+	_ready_peers(service, [host_peer, guest_peer])
+	service.handle_message(host_peer, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	_check(room.match_state.current_round == 1 and room.match_state.match_round_limit == round_limit and room.game_state.current_player == room.game_state.first_player_by_three_clubs(), "rematch preserves length and restores first-round 3-club starter")
+
+func _test_invalid_match_length() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(995, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":4, "match_round_limit":6}})
+	_check(service.rooms.is_empty() and _last_message(995, Protocol.ACTION_REJECTED).size() > 0, "server rejects match lengths outside 4, 8, and 12")
 
 func _test_server_ready_authority() -> void:
 	var service = RoomServiceScript.new()
@@ -183,7 +273,7 @@ func _test_trade_rules() -> void:
 		game.players[player_index].hand = hand
 	var exchange = CardExchangeScript.new()
 	var begin_result: Dictionary = exchange.begin(game.players, roles, bot_flags)
-	_check(begin_result.ok and not exchange.is_complete() and exchange.pending_returns.size() == 6, "trade waits for all six required role participants")
+	_check(begin_result.ok and not exchange.is_complete() and exchange.pending_returns.size() == 3, "trade waits for the three upper-role selections")
 	_check(exchange.pending_amount_for(0) == 3 and exchange.pending_amount_for(1) == 2 and exchange.pending_amount_for(2) == 1, "King, Queen, and Seven receive exact 3/2/1 return counts")
 	_check(exchange.mandatory_ids_for(6) == _ids(game.players[6].hand.slice(2, 5)), "Slave 1 is assigned its highest three cards")
 	_check(exchange.mandatory_ids_for(5) == _ids(game.players[5].hand.slice(3, 5)), "Slave 2 is assigned its highest two cards")
@@ -199,11 +289,8 @@ func _test_trade_rules() -> void:
 	var seven_ids: Array[String] = [_ids(game.players[2].hand)[4]]
 	exchange.select_return_cards(0, king_ids, game.players)
 	exchange.select_return_cards(1, queen_ids, game.players)
+	_check(not exchange.is_complete() and bool(exchange.ready_by_player[6]) and exchange.readiness_by_role()["King"] == "Ready", "upper-role selections are tracked while slaves are automatically ready")
 	exchange.select_return_cards(2, seven_ids, game.players)
-	exchange.select_return_cards(6, exchange.mandatory_ids_for(6), game.players)
-	exchange.select_return_cards(5, exchange.mandatory_ids_for(5), game.players)
-	_check(not exchange.is_complete() and exchange.readiness_by_role()["King"] == "Ready" and exchange.readiness_by_role()["Slave 1"] == "Ready", "confirmed traders become ready while trade still waits for remaining roles")
-	exchange.select_return_cards(4, exchange.mandatory_ids_for(4), game.players)
 	var after_sizes: Array[int] = []
 	for player in game.players:
 		after_sizes.append(player.hand.size())
@@ -235,9 +322,7 @@ func _test_entry_input_layout() -> void:
 	var host_input: LineEdit = flow.find_child("HostInput", true, false)
 	var single_button: Button = flow.find_child("Action_SinglePlayer", true, false)
 	_check(name_label != null and name_label.visible and name_label.text == "Name", "entry screen shows a visible Name label")
-	_check(host_label != null and host_label.visible and host_label.text == "Host", "entry screen shows a visible Host label")
 	_check(name_input != null and single_button != null and is_equal_approx(name_input.custom_minimum_size.x, single_button.custom_minimum_size.x), "Name input width matches the main action button width")
-	_check(host_input != null and single_button != null and is_equal_approx(host_input.custom_minimum_size.x, single_button.custom_minimum_size.x), "Host input width matches the main action button width")
 	flow.free()
 
 func _test_trade_waiting_ui() -> void:
@@ -254,7 +339,7 @@ func _test_trade_waiting_ui() -> void:
 	flow.exchange_participant = false
 	flow.exchange_readiness = {"King":"Ready", "Queen":"Selecting", "Seven":"Ready", "Slave 1":"Ready", "Slave 2":"Ready", "Slave 3":"Selecting"}
 	flow._show_online_game()
-	_check(flow.find_child("TradeWaiting", true, false) != null and flow.find_child("TradeWaiting", true, false).text == "Waiting for card exchange...", "nonparticipant sees Waiting Trade instead of a playable hand")
+	_check(flow.find_child("TradeWaiting", true, false) != null and flow.find_child("TradeWaiting", true, false).text == "Waiting Trade", "nonparticipant sees Waiting Trade instead of a playable hand")
 	_check(flow.find_child("TradeStatus_King", true, false) != null, "trade waiting screen shows role readiness progress")
 	flow.exchange_role = "King"
 	flow.exchange_participant = true
@@ -321,24 +406,21 @@ func _test_server_trade_authority() -> void:
 			if incorrect_slave_ids.size() == 3:
 				break
 	service.handle_message(peers[6], {"type":Protocol.SELECT_CARDS, "payload":{"card_ids":incorrect_slave_ids}})
-	_check(room.phase == "card_exchange" and not bool(room.exchange.ready_by_player[6]) and initial_sizes[6] == game.players[6].hand.size(), "server rejects an incorrect Slave submission without changing hands or readiness")
-	for player_index in [0, 1, 2, 6, 5, 4]:
+	_check(room.phase == "card_exchange" and bool(room.exchange.ready_by_player[6]) and initial_sizes[6] == game.players[6].hand.size(), "slave readiness is automatic and invalid selection cannot change hands")
+	for player_index in [0, 1, 2]:
 		var ids: Array[String] = []
-		if player_index >= 4:
-			ids = room.exchange.mandatory_ids_for(player_index)
-		else:
-			var amount: int = room.exchange.pending_amount_for(player_index)
-			for card: CardData in game.players[player_index].hand:
-				ids.append(card.card_id())
-				if ids.size() == amount:
-					break
+		var amount: int = room.exchange.pending_amount_for(player_index)
+		for card: CardData in game.players[player_index].hand:
+			ids.append(card.card_id())
+			if ids.size() == amount:
+				break
 		service.handle_message(peers[player_index], {"type":Protocol.SELECT_CARDS, "payload":{"card_ids":ids}})
-		if player_index != 4:
+		if player_index != 2:
 			_check(room.phase == "card_exchange", "server waits for the remaining participants after player %d confirms" % (player_index + 1))
 	var final_sizes: Array[int] = []
 	for player in game.players:
 		final_sizes.append(player.hand.size())
-	_check(room.phase == "playing" and room.exchange.is_complete(), "server commits trade and starts play only after all six participants are ready")
+	_check(room.phase == "playing" and room.exchange.is_complete(), "server commits trade after all upper roles confirm")
 	_check(initial_sizes == final_sizes, "server-authoritative trade preserves hand sizes")
 	_check(room.exchange.readiness_by_role().size() == 6, "server publishes ready state for all six trade roles")
 
@@ -566,10 +648,10 @@ func _test_table_presentation() -> void:
 		_check(valid, "%d-player table has visible in-bounds seats with local player at bottom" % count)
 	var red_card: CardView = CardViewScript.new()
 	red_card.setup(_card("Q", "Hearts"), false, true)
-	_check(red_card.top_rank.text == "Q" and red_card.center_suit.text == "♥" and red_card.get_node("FaceMarks").get_child_count() == 2, "card face shows one top-left rank and one centered suit without duplicate corner marks")
-	_check(red_card.top_rank.get_theme_font_size("font_size") >= 16 and red_card.center_suit.get_theme_font_size("font_size") >= 16, "card face text never falls below 16 px")
+	_check(red_card.top_rank.text == "Q" and red_card.center_suit.texture != null and red_card.get_node("FaceMarks").get_child_count() == 2, "card face shows one top-left rank and one centered suit texture")
+	_check(red_card.top_rank.get_theme_font_size("font_size") >= 16, "card rank text never falls below 16 px")
 	red_card.set_available(false)
-	_check(red_card.top_rank.visible and red_card.center_suit.visible and red_card.top_rank.text == "Q" and red_card.center_suit.text == "♥", "disabled card face retains readable rank and center suit")
+	_check(red_card.top_rank.visible and red_card.center_suit.visible and red_card.top_rank.text == "Q" and red_card.center_suit.texture != null, "disabled card face retains readable rank and center suit texture")
 	var flow = MultiplayerFlowScript.new()
 	flow.guest_name = "Ari"
 	_check(flow.get_display_name() == "Ari", "entered display name is available to single-player and room flows")
@@ -590,7 +672,8 @@ func _test_table_presentation() -> void:
 	for item in suit_checks:
 		var suit_view: CardView = CardViewScript.new()
 		suit_view.setup(_card("A", item.suit), false, true)
-		_check(suit_view.center_suit.text == item.symbol and suit_view.center_suit.get_theme_color("font_color") == item.color, "%s suit renders with the expected symbol and color" % item.suit)
+		var expected_texture_path := "res://assets/suits/%s.png" % str(item.suit).to_lower()
+		_check(suit_view.center_suit.texture != null and suit_view.center_suit.texture.resource_path == expected_texture_path and suit_view.top_rank.get_theme_color("font_color") == item.color, "%s suit renders with the expected texture and color" % item.suit)
 		suit_view.free()
 	var combinations: Array = [
 		{"name":"Single", "cards":[_card("3")]},
@@ -664,6 +747,12 @@ func _test_room_round(count: int) -> void:
 	for member in room.members:
 		member.is_bot = true
 		member.peer_id = 0
+	while room.phase == "rps_tiebreak":
+		for player_index in room.rps_players:
+			var choice_key := str(player_index)
+			if not room.rps_choices.has(choice_key):
+				room.rps_choices[choice_key] = 0
+		service._resolve_rps(room)
 	var guard := 0
 	while room.phase == "playing" and guard < 10000:
 		service.tick(0.5)

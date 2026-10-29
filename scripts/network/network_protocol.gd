@@ -26,6 +26,8 @@ const ACTION_REJECTED := "action_rejected"
 const CONNECTED := "connected"
 const LEAVE_ROOM := "leave_room"
 const START_NEXT_ROUND := "start_next_round"
+const REMATCH := "rematch"
+const MATCH_FINISHED := "match_finished"
 
 static func message(message_type: String, payload: Dictionary = {}) -> Dictionary:
 	return {"type": message_type, "payload": payload.duplicate(true)}

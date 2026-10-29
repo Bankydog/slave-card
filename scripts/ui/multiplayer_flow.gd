@@ -5,6 +5,7 @@ const Protocol = preload("res://scripts/network/network_protocol.gd")
 const CardDataScript = preload("res://scripts/cards/card_data.gd")
 const HandSorterScript = preload("res://scripts/cards/hand_sorter.gd")
 const GameRulesScript = preload("res://scripts/game/game_rules.gd")
+const MatchStateScript = preload("res://scripts/game/match_state.gd")
 const CardViewScript = preload("res://scripts/ui/card_view.gd")
 const TablePresentationScript = preload("res://scripts/ui/table_presentation.gd")
 
@@ -20,6 +21,8 @@ const SERVER_URL_CONFIG_PATH := "res://config/server_url.cfg"
 var server_url := DESKTOP_SERVER_URL
 var room_code := ""
 var room_max_players := 8
+var create_match_round_limit := 4
+var match_round_limit := 4
 var room_players: Array = []
 var lobby_all_ready := false
 var lobby_ready_count := 0
@@ -243,10 +246,33 @@ func _show_create_room() -> void:
 	plus.custom_minimum_size = Vector2(56, 48)
 	plus.pressed.connect(func(): room_max_players = mini(12, room_max_players + 1); _show_create_room())
 	row.add_child(plus)
-	_action_button(root, "Create Room", func(): _send_request(Protocol.CREATE_ROOM, {"name": _effective_guest_name(), "max_players": room_max_players}))
+	var rounds_row := HBoxContainer.new()
+	rounds_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	rounds_row.add_theme_constant_override("separation", roundi(8.0 * _display_scale()))
+	var rounds_label := Label.new()
+	rounds_label.text = "Rounds"
+	rounds_label.custom_minimum_size.x = 76.0 * _display_scale()
+	rounds_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	rounds_row.add_child(rounds_label)
+	for round_limit in MatchStateScript.ALLOWED_ROUND_LIMITS:
+		var round_button := Button.new()
+		round_button.text = str(round_limit)
+		round_button.toggle_mode = true
+		round_button.button_pressed = round_limit == create_match_round_limit
+		round_button.custom_minimum_size = Vector2(64.0, 48.0) * _display_scale()
+		round_button.pressed.connect(_select_create_match_round_limit.bind(round_limit))
+		rounds_row.add_child(round_button)
+	root.add_child(rounds_row)
+	_action_button(root, "Create Room", func(): _send_request(Protocol.CREATE_ROOM, {"name": _effective_guest_name(), "max_players": room_max_players, "match_round_limit": create_match_round_limit}))
 	_action_button(root, "Back", _show_main_menu, 150)
 	_status(root)
 	_enforce_text_minimum(root)
+
+func _select_create_match_round_limit(round_limit: int) -> void:
+	if not MatchStateScript.ALLOWED_ROUND_LIMITS.has(round_limit):
+		return
+	create_match_round_limit = round_limit
+	_show_create_room()
 
 func _show_join_room() -> void:
 	page = "join"
@@ -272,6 +298,10 @@ func _show_lobby() -> void:
 	count_label.text = "%d / %d connected" % [room_players.size(), room_max_players]
 	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(count_label)
+	var length_label := Label.new()
+	length_label.text = "Match length: %d rounds" % match_round_limit
+	length_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(length_label)
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size.y = 80 if _is_compact_view() else 220
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -349,7 +379,7 @@ func _show_online_game() -> void:
 	if trading and exchange_role.begins_with("Slave ") and selected_card_ids.is_empty():
 		selected_card_ids = exchange_mandatory_ids.duplicate()
 	HandSorterScript.sort_hand(online_hand)
-	var title_text := "Round %d  ·  %s" % [online_round, "Card Exchange" if trading else ("3♣ Tie Break" if online_phase == "rps_tiebreak" else "Playing")]
+	var title_text := "Round %d / %d  ·  %s" % [online_round, match_round_limit, "Card Exchange" if trading else ("3♣ Tie Break" if online_phase == "rps_tiebreak" else "Playing")]
 	var root := _root_box(title_text)
 	var host := get_parent()
 	if host.has_method("set_game_background"):
@@ -627,26 +657,39 @@ func _trade_is_role(role: String) -> bool:
 
 func _show_results(payload: Dictionary) -> void:
 	page = "results"
+	online_round = int(payload.get("current_round", payload.get("round_number", online_round)))
+	match_round_limit = int(payload.get("match_round_limit", match_round_limit))
 	online_roles = payload.get("roles_by_player", online_roles)
-	var root := _root_box("Round %d Results" % online_round)
+	online_players = payload.get("players", online_players)
+	var root := _root_box("Round %d / %d Results" % [online_round, match_round_limit])
 	var host := get_parent()
 	if host.has_method("set_game_background"):
 		host.set_game_background(online_players.size())
-	var heading := Label.new()
-	heading.text = "Finishing order"
-	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	root.add_child(heading)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.custom_minimum_size.y = 110.0 if _is_compact_view() else 240.0
+	var rows := VBoxContainer.new()
+	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rows.add_theme_constant_override("separation", roundi(4.0 * _display_scale()))
+	scroll.add_child(rows)
+	root.add_child(scroll)
 	var order: Array = payload.get("finishing_order", [])
+	var points: Array = payload.get("round_points", [])
+	var scores: Array = payload.get("match_scores", [])
 	for place in range(order.size()):
 		var player_index := int(order[place])
 		var player_name := "Player %d" % (player_index + 1)
 		if player_index < online_players.size():
 			player_name = str(online_players[player_index].get("name", player_name))
 		var role := _role_for(player_index)
-		var line := Label.new()
-		line.text = "%s  —  %s" % [role, player_name]
-		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		root.add_child(TablePresentationScript.make_role_summary_row(role, line, _display_scale()))
+		var earned := int(points[player_index]) if player_index < points.size() else 0
+		var total := int(scores[player_index]) if player_index < scores.size() else 0
+		var row := Label.new()
+		row.text = "%d. %s  +%d  Total %d  ·  %s" % [place + 1, player_name, earned, total, role]
+		row.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rows.add_child(row)
 	if bool(payload.get("previous_king_demoted", false)):
 		var demotion := Label.new()
 		demotion.text = "The previous King is now Slave 1."
@@ -665,12 +708,52 @@ func _show_results(payload: Dictionary) -> void:
 	trade_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(trade_notice)
 	if is_host:
-		_action_button(root, "Start Next Round · Card Trade", func(): _send_request(Protocol.START_NEXT_ROUND, {}))
+		_action_button(root, "Next Round", func(): _send_request(Protocol.START_NEXT_ROUND, {}))
 	else:
 		var wait := Label.new()
 		wait.text = "Waiting for the host to start the next round"
 		wait.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		root.add_child(wait)
+	_action_button(root, "Leave Room", _leave_room, 170)
+	_status(root)
+	_enforce_text_minimum(root)
+
+func _show_final_match_result(payload: Dictionary) -> void:
+	page = "final_results"
+	online_round = int(payload.get("current_round", online_round))
+	match_round_limit = int(payload.get("match_round_limit", match_round_limit))
+	online_roles = payload.get("roles_by_player", online_roles)
+	online_players = payload.get("players", online_players)
+	var root := _root_box("Final Result — %d Rounds" % match_round_limit)
+	var host := get_parent()
+	if host.has_method("set_game_background"):
+		host.set_game_background(online_players.size())
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var rows := VBoxContainer.new()
+	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rows.add_theme_constant_override("separation", roundi(5.0 * _display_scale()))
+	scroll.add_child(rows)
+	root.add_child(scroll)
+	var leaderboard: Array = payload.get("leaderboard", [])
+	for place in range(leaderboard.size()):
+		var entry: Dictionary = leaderboard[place]
+		var row := Label.new()
+		row.text = "%d. %s  ·  Score %d  ·  1st %d  ·  2nd %d" % [place + 1, str(entry.get("name", "Player")), int(entry.get("score", 0)), int(entry.get("first_place_count", 0)), int(entry.get("second_place_count", 0))]
+		row.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		if place == 0:
+			row.add_theme_color_override("font_color", Color("#f3d78b"))
+			row.add_theme_font_size_override("font_size", maxi(18, roundi(24.0 * _display_scale())))
+		rows.add_child(row)
+	if is_host:
+		_action_button(root, "Rematch", func(): _send_request(Protocol.REMATCH, {}))
+	else:
+		var waiting := Label.new()
+		waiting.text = "Waiting for the host to rematch"
+		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		root.add_child(waiting)
 	_action_button(root, "Leave Room", _leave_room, 170)
 	_status(root)
 	_enforce_text_minimum(root)
@@ -709,18 +792,21 @@ func _on_server_message(message: Dictionary) -> void:
 		Protocol.LOBBY_STATE:
 			room_code = str(payload.get("room_code", room_code))
 			room_max_players = int(payload.get("max_players", room_max_players))
+			match_round_limit = int(payload.get("match_round_limit", match_round_limit))
+			online_round = int(payload.get("current_round", online_round))
 			room_players = payload.get("players", [])
 			local_player_index = int(payload.get("your_player_index", -1))
 			is_host = bool(payload.get("is_host", is_host))
 			lobby_all_ready = bool(payload.get("all_ready", false))
 			lobby_ready_count = int(payload.get("ready_count", 0))
 			lobby_human_count = int(payload.get("human_count", room_players.size()))
-			if page == "lobby" or page == "create" or page == "join":
+			if page == "lobby" or page == "create" or page == "join" or (page == "final_results" and str(payload.get("phase", "")) == "lobby"):
 				_show_lobby()
 		Protocol.START_GAME:
 			online_snapshot.clear()
 			online_center_card_ids.clear()
-			online_round = int(payload.get("round_number", online_round + 1))
+			online_round = int(payload.get("current_round", payload.get("round_number", online_round + 1)))
+			match_round_limit = int(payload.get("match_round_limit", match_round_limit))
 			_play_round_start_once(online_round)
 			online_center_initialized = false
 			online_phase = str(payload.get("phase", "playing"))
@@ -728,7 +814,8 @@ func _on_server_message(message: Dictionary) -> void:
 			online_roles = payload.get("roles_by_player", online_roles)
 		Protocol.DEAL:
 			online_player_index = int(payload.get("player_index", online_player_index))
-			online_round = int(payload.get("round_number", online_round))
+			online_round = int(payload.get("current_round", payload.get("round_number", online_round)))
+			match_round_limit = int(payload.get("match_round_limit", match_round_limit))
 			_play_round_start_once(online_round)
 			online_center_initialized = true
 			online_phase = str(payload.get("phase", online_phase))
@@ -777,9 +864,14 @@ func _on_server_message(message: Dictionary) -> void:
 			online_roles = payload.get("roles_by_player", online_roles)
 		Protocol.ROUND_FINISHED:
 			online_players = payload.get("players", online_players)
-			online_snapshot["finishing_order"] = payload.get("finishing_order", [])
+			online_snapshot = payload.duplicate(true)
 			online_roles = payload.get("roles_by_player", online_roles)
 			_show_results(payload)
+		Protocol.MATCH_FINISHED:
+			online_players = payload.get("players", online_players)
+			online_snapshot = payload.duplicate(true)
+			online_roles = payload.get("roles_by_player", online_roles)
+			_show_final_match_result(payload)
 		Protocol.ACTION_REJECTED:
 			status_text = str(payload.get("reason", "The action was rejected."))
 			_refresh_current_page()
@@ -844,6 +936,7 @@ func _refresh_current_page() -> void:
 		"lobby": _show_lobby()
 		"game": _show_online_game()
 		"results": _show_results(online_snapshot)
+		"final_results": _show_final_match_result(online_snapshot)
 
 func _enforce_text_minimum(root: Node) -> void:
 	_enforce_node_text_minimum(root)
