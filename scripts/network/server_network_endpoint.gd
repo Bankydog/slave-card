@@ -11,6 +11,7 @@ var port: int = DEFAULT_PORT
 var bind_address := BIND_ADDRESS
 var socket_peer: WebSocketMultiplayerPeer
 var room_service
+var is_listening := false
 
 static func _configured_port() -> int:
 	var port_value := OS.get_environment("GODOT_PORT").strip_edges()
@@ -43,10 +44,13 @@ func _ready() -> void:
 	var error := socket_peer.create_server(port, bind_address)
 	if error != OK:
 		push_error("Could not start WebSocket room server on port %d (error %d)." % [port, error])
+		get_tree().quit(1)
 		return
 	multiplayer.multiplayer_peer = socket_peer
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
+	is_listening = true
 	print("Slave Card WebSocket room server listening on %s:%d" % [bind_address, port])
+	print("GODOT_BACKEND_READY")
 
 func _process(delta: float) -> void:
 	if room_service == null:
@@ -72,6 +76,7 @@ func _send_to_peer(peer_id: int, message: Dictionary) -> void:
 	rpc_id(peer_id, "receive_message", message)
 
 func shutdown() -> void:
+	is_listening = false
 	if socket_peer != null:
 		socket_peer.close()
 		socket_peer = null
