@@ -29,7 +29,7 @@ func handle_message(peer_id: int, message: Dictionary) -> void:
 		Protocol.LEAVE_ROOM:
 			_leave_room(peer_id)
 		Protocol.START_GAME:
-			print("[MP Server] Start Game request received.")
+			print("[MP Server] Start Game request received: peer=%d." % peer_id)
 			_start_game(peer_id, payload)
 		Protocol.SET_READY:
 			_set_ready(peer_id, payload)
@@ -312,6 +312,7 @@ func _start_game(peer_id: int, payload: Dictionary) -> void:
 		_reject_start_game(peer_id, "The match configuration is invalid.")
 		return
 	print("[MP Server] Start Game validation passed: peer=%d." % peer_id)
+	print("[MP Server] Match state created: seats=%d rounds=%d." % [final_count, int(room.match_round_limit)])
 	room.phase = "starting"
 	print("[MP Server] Room marked starting.")
 	room.pending_seat_swaps.clear()
@@ -462,7 +463,8 @@ func _start_round(room: Dictionary) -> void:
 		room.exchange = null
 	room.phase = phase
 	if room.round_number == 1:
-		print("[MP Server] Initial game state created; room phase=%s." % room.phase)
+		print("[MP Server] Initial round state created; room phase=%s." % room.phase)
+	print("[MP Server] Starter decision: phase=%s rps_players=%d." % [room.phase, room.rps_players.size()])
 	print("[MP Server] Broadcasting Start Game; players=%d round=%d." % [room.members.size(), room.round_number])
 	_broadcast(room, Protocol.START_GAME, {
 		"room_code": room.code,
@@ -539,6 +541,7 @@ func _continue_rps(peer_id: int) -> void:
 		_resolve_rps(room)
 
 func _broadcast_rps_state(room: Dictionary) -> void:
+	print("[MP Server] Broadcasting RPS state: phase=%s players=%d choices=%d." % [room.phase, room.rps_players.size(), room.rps_choices.size()])
 	_broadcast(room, Protocol.RPS_STATE, {
 		"phase": room.phase,
 		"players": room.rps_players.duplicate(),

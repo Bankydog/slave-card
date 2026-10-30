@@ -35,7 +35,12 @@ func disconnect_from_server() -> void:
 func send_intent(message_type: String, payload: Dictionary = {}) -> bool:
 	if not connected:
 		return false
-	rpc_id(1, "submit_message", NetworkProtocol.message(message_type, payload))
+	var message := NetworkProtocol.message(message_type, payload)
+	if message_type in [NetworkProtocol.START_GAME, NetworkProtocol.SELECT_RPS, NetworkProtocol.CONTINUE_RPS]:
+		print("[MP Client] Request serialized: type=%s." % str(message.get("type", "")))
+	rpc_id(1, "submit_message", message)
+	if message_type in [NetworkProtocol.START_GAME, NetworkProtocol.SELECT_RPS, NetworkProtocol.CONTINUE_RPS]:
+		print("[MP Client] WebSocket RPC queued: type=%s." % message_type)
 	return true
 
 func handle_server_message(message: Dictionary) -> void:

@@ -17,12 +17,18 @@ func submit_message(message: Dictionary) -> void:
 	var sender_id := multiplayer.get_remote_sender_id()
 	if sender_id <= 1:
 		return
+	var message_type := str(message.get("type", ""))
+	if message_type in ["start_game", "select_rps", "continue_rps"]:
+		print("[MP Server] RPC decoded: peer=%d type=%s." % [sender_id, message_type])
 	handle_client_message(sender_id, message)
 
 @rpc("authority", "call_remote", "reliable")
 func receive_message(message: Dictionary) -> void:
 	if is_server_endpoint():
 		return
+	var message_type := str(message.get("type", ""))
+	if message_type in ["start_game", "deal", "rps_state", "turn_changed", "action_rejected"]:
+		print("[MP Client] RPC decoded: type=%s." % message_type)
 	handle_server_message(message)
 
 func is_server_endpoint() -> bool:

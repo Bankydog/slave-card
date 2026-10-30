@@ -1328,6 +1328,8 @@ func _on_connection_status(connected: bool, reason: String) -> void:
 
 func _on_server_message(message: Dictionary) -> void:
 	var message_type := str(message.get("type", ""))
+	if message_type in [Protocol.START_GAME, Protocol.DEAL, Protocol.RPS_STATE, Protocol.TURN_CHANGED, Protocol.ACTION_REJECTED]:
+		print("[MP] Start flow packet handled: type=%s page=%s." % [message_type, page])
 	if message_type == Protocol.START_GAME:
 		print("[MP] Start Game broadcast received.")
 	var payload: Dictionary = message.get("payload", {})

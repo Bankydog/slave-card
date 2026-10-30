@@ -57,12 +57,18 @@ func is_server_endpoint() -> bool:
 	return true
 
 func handle_client_message(peer_id: int, message: Dictionary) -> void:
+	var message_type := str(message.get("type", ""))
+	if message_type in ["start_game", "select_rps", "continue_rps"]:
+		print("[MP Server] Dispatching request: peer=%d type=%s." % [peer_id, message_type])
 	room_service.handle_message(peer_id, message)
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	room_service.peer_disconnected(peer_id)
 
 func _send_to_peer(peer_id: int, message: Dictionary) -> void:
+	var message_type := str(message.get("type", ""))
+	if message_type in ["start_game", "deal", "rps_state", "turn_changed", "action_rejected"]:
+		print("[MP Server] RPC queued: peer=%d type=%s." % [peer_id, message_type])
 	rpc_id(peer_id, "receive_message", message)
 
 func shutdown() -> void:
