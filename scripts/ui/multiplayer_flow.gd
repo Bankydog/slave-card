@@ -56,6 +56,7 @@ var online_roles: Dictionary = {}
 var online_snapshot: Dictionary = {}
 var online_center_card_ids: Array[String] = []
 var online_center_cards: Array[CardData] = []
+var online_table_view: Control
 var return_card_count := 0
 var selected_card_ids: Array[String] = []
 var exchange_role := ""
@@ -125,9 +126,11 @@ func _clear_screen() -> void:
 	if host.has_method("set_title_screen_enabled"):
 		host.set_title_screen_enabled(true)
 	for child in get_children():
-		if child != endpoint:
+		if child != endpoint and not (page == "game" and child == online_table_view):
 			remove_child(child)
 			child.queue_free()
+	if page != "game" and is_instance_valid(online_table_view):
+		online_table_view = null
 
 func _display_scale() -> float:
 	return float(TableLayoutScript.layout_for_viewport(get_viewport_rect().size).scale)
@@ -636,7 +639,15 @@ func _style_lobby_button(button: Button, normal_color: Color, hover_color: Color
 func _style_lobby_controls(root: Control) -> void:
 	var ready_button := root.find_child("Action_Ready", true, false) as Button
 	if is_instance_valid(ready_button):
-		_style_lobby_button(ready_button, Color("#b3261e"), Color("#d63a30"), Color("#8f1d18"))
+		_style_lobby_button(ready_button, Color.WHITE, Color("#f2f2f2"), Color("#e2e2e2"), Color("#c8c8c8"))
+		for state in ["normal", "hover", "pressed", "disabled"]:
+			var ready_style := ready_button.get_theme_stylebox(state) as StyleBoxFlat
+			ready_style.border_color = Color("#4a4a4a")
+			ready_style.set_border_width_all(1)
+		ready_button.add_theme_color_override("font_color", Color.BLACK)
+		ready_button.add_theme_color_override("font_hover_color", Color.BLACK)
+		ready_button.add_theme_color_override("font_pressed_color", Color.BLACK)
+		ready_button.add_theme_color_override("font_disabled_color", Color("#333333"))
 	var start_button := root.find_child("Action_StartGame", true, false) as Button
 	if is_instance_valid(start_button):
 		_style_lobby_button(start_button, Color("#176b3a"), Color("#21854c"), Color("#10552e"), Color("#777777"))
@@ -709,19 +720,25 @@ func _show_online_game() -> void:
 	if host.has_method("set_title_screen_enabled"):
 		host.set_title_screen_enabled(false)
 	if online_phase in ["rps_tiebreak", "rps_result"]:
+		if is_instance_valid(online_table_view):
+			online_table_view.hide()
 		var table := TablePresentationScript.new()
 		table.name = "TablePresentation"
 		table.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		root.add_child(table)
 		var layout: Dictionary = TableLayoutScript.layout_for_viewport(get_viewport_rect().size)
 		var table_rect: Rect2 = layout.table_zone
+		var rps_center := CenterContainer.new()
+		rps_center.name = "RPSCenter"
+		rps_center.position = table_rect.position
+		rps_center.size = table_rect.size
+		rps_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		root.add_child(rps_center)
 		var rps_content := VBoxContainer.new()
 		rps_content.name = "RPSContent"
-		rps_content.position = table_rect.position
-		rps_content.size = table_rect.size
 		rps_content.alignment = BoxContainer.ALIGNMENT_CENTER
 		rps_content.add_theme_constant_override("separation", roundi(10.0 * _display_scale()))
-		root.add_child(rps_content)
+		rps_center.add_child(rps_content)
 		_show_online_rps(rps_content)
 		_enforce_text_minimum(root)
 		return
@@ -760,10 +777,14 @@ func _show_online_game() -> void:
 			if online_center_initialized:
 				SfxManager.play_card_play()
 		online_center_card_ids = next_center_ids.duplicate()
-	var table_view: Control = TablePresentationScript.new()
-	table_view.name = "TablePresentation"
-	table_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(table_view)
+	if not is_instance_valid(online_table_view):
+		online_table_view = TablePresentationScript.new()
+		online_table_view.name = "OnlineTablePresentation"
+		online_table_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		add_child(online_table_view)
+		move_child(online_table_view, 0)
+	online_table_view.show()
+	var table_view := online_table_view
 	table_view.configure(online_players, online_player_index, int(online_snapshot.get("current_player", -1)), passed, played_pile, center_text, _is_compact_view(), animation_player, newly_played_cards)
 
 	var center_message := ""
@@ -970,6 +991,8 @@ func _reveal_online_rps() -> void:
 		host.set_game_background(online_players.size())
 	if host.has_method("set_title_screen_enabled"):
 		host.set_title_screen_enabled(false)
+	if is_instance_valid(online_table_view):
+		online_table_view.hide()
 	var root := Control.new()
 	root.name = "OnlineRPSResultLayout"
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -980,12 +1003,16 @@ func _reveal_online_rps() -> void:
 	root.add_child(table)
 	var layout: Dictionary = TableLayoutScript.layout_for_viewport(get_viewport_rect().size)
 	var table_rect: Rect2 = layout.table_zone
+	var result_center := CenterContainer.new()
+	result_center.name = "RPSResultCenter"
+	result_center.position = table_rect.position
+	result_center.size = table_rect.size
+	result_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(result_center)
 	var content := VBoxContainer.new()
-	content.position = table_rect.position
-	content.size = table_rect.size
 	content.alignment = BoxContainer.ALIGNMENT_CENTER
 	content.add_theme_constant_override("separation", roundi(10.0 * _display_scale()))
-	root.add_child(content)
+	result_center.add_child(content)
 	var heading := Label.new()
 	heading.text = "Rock · Paper · Scissors"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1044,6 +1071,7 @@ func _reveal_online_rps() -> void:
 			again.text = "Choose Again"
 			again.custom_minimum_size = Vector2(190.0, 48.0) * _display_scale()
 			again.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			_style_rps_action_button(again)
 			again.pressed.connect(_send_request.bind(Protocol.CONTINUE_RPS, {}))
 			content.add_child(again)
 		else:
@@ -1059,6 +1087,7 @@ func _reveal_online_rps() -> void:
 			start_round.text = "Start Round"
 			start_round.custom_minimum_size = Vector2(190.0, 48.0) * _display_scale()
 			start_round.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			_style_rps_action_button(start_round)
 			start_round.pressed.connect(_send_request.bind(Protocol.CONTINUE_RPS, {}))
 			content.add_child(start_round)
 		else:
@@ -1069,6 +1098,28 @@ func _add_rps_waiting_label(parent: Control, message: String) -> void:
 	waiting.text = message
 	waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	parent.add_child(waiting)
+
+func _style_rps_action_button(button: Button) -> void:
+	for state in ["normal", "hover", "pressed", "disabled"]:
+		var style := StyleBoxFlat.new()
+		style.bg_color = Color("#176b43")
+		if state == "hover":
+			style.bg_color = Color("#238b55")
+		elif state == "pressed":
+			style.bg_color = Color("#105535")
+		elif state == "disabled":
+			style.bg_color = Color("#34483d")
+		style.border_color = Color("#e4bf60")
+		style.set_border_width_all(2)
+		style.set_corner_radius_all(8)
+		style.content_margin_left = 12.0 * _display_scale()
+		style.content_margin_right = 12.0 * _display_scale()
+		button.add_theme_stylebox_override(state, style)
+	button.add_theme_color_override("font_color", Color.WHITE)
+	button.add_theme_color_override("font_hover_color", Color.WHITE)
+	button.add_theme_color_override("font_pressed_color", Color.WHITE)
+	button.add_theme_color_override("font_disabled_color", Color("#c3c8c1"))
+	button.add_theme_font_size_override("font_size", maxi(18, roundi(20.0 * _display_scale())))
 
 func _select_rps_choice(choice: int) -> void:
 	_send_request(Protocol.SELECT_RPS, {"choice": choice})
@@ -1374,6 +1425,9 @@ func _on_server_message(message: Dictionary) -> void:
 				_show_lobby()
 		Protocol.START_GAME:
 			print("[MP] Lobby teardown beginning; preserving network endpoint.")
+			if is_instance_valid(online_table_view):
+				online_table_view.queue_free()
+			online_table_view = null
 			start_game_state_logged = false
 			page = "game"
 			online_snapshot.clear()

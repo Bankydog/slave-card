@@ -1072,7 +1072,7 @@ func _test_lobby_visual_styles() -> void:
 	_check(heading_is_dark, "lobby heading uses near-black text")
 	var ready_button := flow.find_child("Action_Ready", true, false) as Button
 	var ready_style := ready_button.get_theme_stylebox("normal") as StyleBoxFlat
-	_check(ready_style.bg_color == Color("#b3261e") and ready_button.get_theme_color("font_color") == Color.WHITE, "Ready button uses red background and white text")
+	_check(ready_style.bg_color == Color.WHITE and ready_button.get_theme_color("font_color") == Color.BLACK, "Ready button uses white background and black text")
 	var start_button := flow.find_child("Action_StartGame", true, false) as Button
 	var disabled_style := start_button.get_theme_stylebox("disabled") as StyleBoxFlat
 	_check(start_button.disabled and disabled_style.bg_color == Color("#777777") and start_button.get_theme_color("font_disabled_color") == Color("#f1f1ee"), "disabled Start Game remains readable on muted gray")

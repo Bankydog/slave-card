@@ -8,7 +8,8 @@ const SEVEN_TEXTURE = preload("res://assets/gadget/se7en.png")
 const SLAVES_TEXTURE = preload("res://assets/gadget/slaves.png")
 const RPS_ATLAS = preload("res://assets/suits/SPR.png")
 const RPS_BACK = preload("res://assets/suits/back-card.png")
-const CARD_FLIP_SOUND = preload("res://assets/sound/flip-card.mp3")
+const CARD_FLIGHT_DURATION := 0.65
+const CARD_FLIGHT_STAGGER := 0.012
 
 var seat_widgets: Array[PanelContainer] = []
 var name_labels: Array[Label] = []
@@ -159,9 +160,8 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 	var source := play_flight_layer.get_global_transform().affine_inverse() * source_global
 	var card_width := (42.0 if compact_view else 58.0) * flight_scale
 	var card_height := (64.0 if compact_view else 92.0) * flight_scale
-	var stagger := 0.035
-	var sound_duration := CARD_FLIP_SOUND.get_length()
-	var flight_duration := maxf(0.1, sound_duration - stagger * float(ordered_cards.size() - 1))
+	var stagger := CARD_FLIGHT_STAGGER
+	var flight_duration := CARD_FLIGHT_DURATION
 	play_animation_tween = create_tween()
 	play_animation_tween.set_parallel(true)
 	for i in range(ordered_cards.size()):
