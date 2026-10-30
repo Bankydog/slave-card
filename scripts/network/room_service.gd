@@ -424,7 +424,11 @@ func _start_round(room: Dictionary) -> void:
 	if not room.match_state.advance_round():
 		return
 	room.round_number = int(room.match_state.current_round)
-	room.game_state = GameStateFactoryScript.create()
+	var new_game_state: Variant = GameStateFactoryScript.create()
+	if new_game_state == null or not is_instance_valid(new_game_state) or not new_game_state.has_method("start"):
+		push_error("[MP Server] Could not create a usable GameState for round %d." % room.round_number)
+		return
+	room.game_state = new_game_state
 	room.game_state.start(room.members.size(), 0, round_starter)
 	for i in range(room.members.size()):
 		var member: Dictionary = room.members[i]
