@@ -69,6 +69,8 @@ var connection_attempts := 0
 var request_timeout_timer: Timer
 var connection_retry_timer: Timer
 var status_text := ""
+var fill_bots_enabled := false
+var start_game_state_logged := false
 
 const CONNECTION_RETRY_INTERVAL := 4.0
 const MAX_CONNECTION_ATTEMPTS := 16
@@ -531,8 +533,10 @@ func _show_lobby() -> void:
 		var fill_bots := CheckBox.new()
 		fill_bots.text = "Fill empty seats with bots"
 		fill_bots.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		fill_bots.button_pressed = fill_bots_enabled
+		fill_bots.toggled.connect(_on_fill_bots_toggled)
 		root.add_child(fill_bots)
-		var start_button := _action_button(root, "Start Game", func(): _send_request(Protocol.START_GAME, {"fill_bots": fill_bots.button_pressed}))
+		var start_button := _action_button(root, "Start Game", _request_start_game)
 		start_button.disabled = request_in_flight or not lobby_all_ready
 	else:
 		var waiting := Label.new()
@@ -543,6 +547,13 @@ func _show_lobby() -> void:
 	_status(root)
 	_enforce_text_minimum(root)
 	_style_lobby_controls(root)
+
+func _on_fill_bots_toggled(enabled: bool) -> void:
+	fill_bots_enabled = enabled
+
+func _request_start_game() -> void:
+	print("[MP] Start Game pressed.")
+	_send_request(Protocol.START_GAME, {"fill_bots": fill_bots_enabled})
 
 func _open_seat_swap_request_dialog(target_peer: int, target_name: String) -> void:
 	if request_in_flight or not is_instance_valid(seat_swap_dialog):
@@ -1201,6 +1212,8 @@ func _send_request(message_type: String, payload: Dictionary) -> void:
 	_refresh_current_page()
 	if endpoint.connected:
 		if endpoint.send_intent(message_type, payload):
+			if message_type == Protocol.START_GAME:
+				print("[MP] Start Game request sent.")
 			pending_request.clear()
 		else:
 			_schedule_connection_retry("Could not send the request.")
@@ -1277,10 +1290,13 @@ func _on_connection_status(connected: bool, reason: String) -> void:
 			if not endpoint.send_intent(request_type, pending_request.payload):
 				_schedule_connection_retry("Could not send the request.")
 			else:
+				if request_type == Protocol.START_GAME:
+					print("[MP] Start Game request sent after connecting.")
 				pending_request.clear()
 				status_text = _request_status_text(request_type, false)
 				_refresh_current_page()
 	else:
+		print("[MP] WebSocket disconnected: %s" % reason)
 		if request_in_flight and not pending_request.is_empty():
 			_schedule_connection_retry(reason)
 		elif request_in_flight:
@@ -1291,6 +1307,8 @@ func _on_connection_status(connected: bool, reason: String) -> void:
 
 func _on_server_message(message: Dictionary) -> void:
 	var message_type := str(message.get("type", ""))
+	if message_type == Protocol.START_GAME:
+		print("[MP] Start Game broadcast received.")
 	var payload: Dictionary = message.get("payload", {})
 	if request_in_flight and _request_has_response(message_type, request_type_in_flight):
 		if message_type == Protocol.ACTION_REJECTED:
@@ -1326,6 +1344,8 @@ func _on_server_message(message: Dictionary) -> void:
 			if page == "lobby" or page == "create" or page == "join" or (page == "final_results" and str(payload.get("phase", "")) == "lobby"):
 				_show_lobby()
 		Protocol.START_GAME:
+			print("[MP] Lobby teardown beginning; preserving network endpoint.")
+			start_game_state_logged = false
 			page = "game"
 			online_snapshot.clear()
 			online_center_card_ids.clear()
@@ -1340,6 +1360,7 @@ func _on_server_message(message: Dictionary) -> void:
 			online_hand.clear()
 			selected_card_ids.clear()
 			_show_online_game()
+			print("[MP] Gameplay UI created.")
 		Protocol.DEAL:
 			online_player_index = int(payload.get("player_index", online_player_index))
 			online_round = int(payload.get("current_round", payload.get("round_number", online_round)))
@@ -1384,6 +1405,9 @@ func _on_server_message(message: Dictionary) -> void:
 				return
 			online_snapshot = payload
 			_sync_online_center_cards(payload)
+			if not start_game_state_logged:
+				start_game_state_logged = true
+				print("[MP] First game state applied.")
 			online_phase = str(payload.get("phase", online_phase))
 			online_players = payload.get("players", online_players)
 			if page == "game":

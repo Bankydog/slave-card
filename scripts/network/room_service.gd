@@ -29,6 +29,7 @@ func handle_message(peer_id: int, message: Dictionary) -> void:
 		Protocol.LEAVE_ROOM:
 			_leave_room(peer_id)
 		Protocol.START_GAME:
+			print("[MP Server] Start Game request received.")
 			_start_game(peer_id, payload)
 		Protocol.SET_READY:
 			_set_ready(peer_id, payload)
@@ -270,21 +271,21 @@ func _resolve_preplay_forfeit(room: Dictionary, departed_index: int) -> void:
 func _start_game(peer_id: int, payload: Dictionary) -> void:
 	var room = _room_for_peer(peer_id)
 	if room == null:
-		_reject(peer_id, "You are not in a room.")
+		_reject_start_game(peer_id, "You are not in a room.")
 		return
 	if int(room.host_peer) != peer_id:
-		_reject(peer_id, "Only the host can start the game.")
+		_reject_start_game(peer_id, "Only the host can start the game.")
 		return
 	if room.phase != "lobby":
-		_reject(peer_id, "The game is already running.")
+		_reject_start_game(peer_id, "The game is already running.")
 		return
 	if not _all_humans_ready(room):
-		_reject(peer_id, "All human players must be Ready before starting.")
+		_reject_start_game(peer_id, "All human players must be Ready before starting.")
 		return
 	var fill_bots := bool(payload.get("fill_bots", false))
 	var final_count: int = int(room.max_players) if fill_bots else room.members.size()
 	if final_count < 2:
-		_reject(peer_id, "At least two seats are needed. Add bots or invite a player.")
+		_reject_start_game(peer_id, "At least two seats are needed. Add bots or invite a player.")
 		return
 	room.pending_seat_swaps.clear()
 	if fill_bots:
@@ -292,8 +293,9 @@ func _start_game(peer_id: int, payload: Dictionary) -> void:
 			room.members.append({"peer_id": 0, "name": "Bot %d" % next_bot_name, "is_bot": true, "ready": true})
 			next_bot_name += 1
 	if not room.match_state.begin(final_count, int(room.match_round_limit)):
-		_reject(peer_id, "The match configuration is invalid.")
+		_reject_start_game(peer_id, "The match configuration is invalid.")
 		return
+	print("[MP Server] Start Game validation passed.")
 	room.round_number = 0
 	room.roles_by_player.clear()
 	for member in room.members:
@@ -343,6 +345,10 @@ func _set_ready(peer_id: int, payload: Dictionary) -> void:
 		return
 	room.members[player_index]["ready"] = bool(payload.get("ready", false))
 	_broadcast_lobby(room)
+
+func _reject_start_game(peer_id: int, reason: String) -> void:
+	print("[MP Server] Start Game validation rejected: %s" % reason)
+	_reject(peer_id, reason)
 
 func _all_humans_ready(room: Dictionary) -> bool:
 	for member in room.members:
@@ -421,6 +427,7 @@ func _start_round(room: Dictionary) -> void:
 	else:
 		room.exchange = null
 	room.phase = phase
+	print("[MP Server] Broadcasting Start Game; players=%d round=%d." % [room.members.size(), room.round_number])
 	_broadcast(room, Protocol.START_GAME, {
 		"room_code": room.code,
 		"round_number": room.round_number,
