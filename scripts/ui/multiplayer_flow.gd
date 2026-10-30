@@ -9,6 +9,7 @@ const MatchStateScript = preload("res://scripts/game/match_state.gd")
 const CardViewScript = preload("res://scripts/ui/card_view.gd")
 const TablePresentationScript = preload("res://scripts/ui/table_presentation.gd")
 const TableLayoutScript = preload("res://scripts/ui/table_layout.gd")
+const READY_CHECK_TEXTURE = preload("res://assets/gadget/check.png")
 
 signal single_player_requested
 
@@ -54,6 +55,7 @@ var online_rules := GameRulesScript.new()
 var online_roles: Dictionary = {}
 var online_snapshot: Dictionary = {}
 var online_center_card_ids: Array[String] = []
+var online_center_cards: Array[CardData] = []
 var return_card_count := 0
 var selected_card_ids: Array[String] = []
 var exchange_role := ""
@@ -128,17 +130,6 @@ func _display_scale() -> float:
 
 func _is_compact_view() -> bool:
 	return DisplayServer.window_get_size().y < 500
-
-func _update_lobby_grid_columns(grid: GridContainer) -> void:
-	if not is_instance_valid(grid):
-		return
-	var width := get_viewport_rect().size.x
-	if width >= 1100.0:
-		grid.columns = 4
-	elif width >= 700.0 and not _is_compact_view():
-		grid.columns = 3
-	else:
-		grid.columns = 2
 
 func _set_guest_name(value: String) -> void:
 	guest_name = value
@@ -452,25 +443,27 @@ func _show_lobby() -> void:
 	centered.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	centered.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.add_child(centered)
-	var grid := GridContainer.new()
-	grid.name = "LobbyPlayerGrid"
-	grid.add_theme_constant_override("h_separation", roundi(12.0 * _display_scale()))
-	grid.add_theme_constant_override("v_separation", roundi(10.0 * _display_scale()))
-	centered.add_child(grid)
+	var columns_row := HBoxContainer.new()
+	columns_row.name = "LobbyPlayerColumns"
+	columns_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	columns_row.add_theme_constant_override("separation", roundi(12.0 * _display_scale()))
+	columns_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	centered.add_child(columns_row)
+	var player_columns: Array[VBoxContainer] = []
+	var visible_player_count := 0
 	root.add_child(scroll)
-	_update_lobby_grid_columns(grid)
-	scroll.resized.connect(_update_lobby_grid_columns.bind(grid))
 	for player in room_players:
 		var player_peer := int(player.get("peer_id", 0))
 		var is_bot := bool(player.get("is_bot", false))
+		if is_bot:
+			continue
 		var is_local := int(player.get("player_index", -1)) == local_player_index
 		var card := Button.new()
 		card.name = "LobbyPlayerCard_%d" % int(player.get("player_index", 0))
 		card.custom_minimum_size = Vector2(220.0, 42.0 if _is_compact_view() else 54.0) * _display_scale()
 		card.add_theme_font_size_override("font_size", maxi(16, roundi(17.0 * _display_scale())))
 		_style_lobby_card_background(card)
-		var badge := "Host" if bool(player.get("is_host", false)) else ("Bot" if is_bot else "Guest")
-		var ready_text := "Ready" if bool(player.get("ready", false)) else "Not Ready"
+		var is_host_player := bool(player.get("is_host", false))
 		var card_row := HBoxContainer.new()
 		card_row.name = "LobbyPlayerRow"
 		card_row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -484,18 +477,36 @@ func _show_lobby() -> void:
 		player_name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		player_name_label.clip_text = true
 		card_row.add_child(player_name_label)
-		var badge_label := Label.new()
-		badge_label.text = badge
-		card_row.add_child(badge_label)
-		var ready_label := Label.new()
-		ready_label.name = "LobbyReadyState"
-		ready_label.text = "LEFT" if bool(player.get("disconnected", false)) else ready_text
-		ready_label.add_theme_color_override("font_color", Color("#23723b") if bool(player.get("ready", false)) else Color("#a52a2a"))
-		card_row.add_child(ready_label)
+		if is_host_player:
+			var badge_label := Label.new()
+			badge_label.text = "Host"
+			card_row.add_child(badge_label)
+		var disconnected := bool(player.get("disconnected", false))
+		if bool(player.get("ready", false)) and not disconnected:
+			var ready_icon := TextureRect.new()
+			ready_icon.name = "LobbyReadyState"
+			ready_icon.texture = READY_CHECK_TEXTURE
+			ready_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			ready_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			ready_icon.custom_minimum_size = Vector2(24, 24) * _display_scale()
+			card_row.add_child(ready_icon)
+		elif disconnected:
+			var status_label := Label.new()
+			status_label.text = "LEFT"
+			status_label.add_theme_color_override("font_color", Color("#a52a2a"))
+			card_row.add_child(status_label)
 		card.disabled = is_bot or is_local or player_peer <= 0
 		if not card.disabled:
 			card.pressed.connect(_open_seat_swap_request_dialog.bind(player_peer, str(player.get("name", "Guest"))))
-		grid.add_child(card)
+		var column_index := int(visible_player_count / 6)
+		while player_columns.size() <= column_index:
+			var player_column := VBoxContainer.new()
+			player_column.add_theme_constant_override("separation", roundi(10.0 * _display_scale()))
+			player_column.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+			columns_row.add_child(player_column)
+			player_columns.append(player_column)
+		player_columns[column_index].add_child(card)
+		visible_player_count += 1
 	if not outgoing_seat_swaps.is_empty():
 		var outgoing_label := Label.new()
 		outgoing_label.text = "Seat swap request sent. Waiting for a reply."
@@ -639,6 +650,29 @@ func _image_action_button(button_name: String, texture_path: String, tooltip: St
 	button.pressed.connect(action)
 	return button
 
+func _sync_online_center_cards(snapshot: Dictionary) -> void:
+	if snapshot.has("pile_cards"):
+		online_center_cards.clear()
+		for item in snapshot.get("pile_cards", []):
+			online_center_cards.append(CardDataScript.from_dict(item))
+		return
+
+	var latest_cards: Array = snapshot.get("current_cards", [])
+	if latest_cards.is_empty() and not snapshot.get("current_card", {}).is_empty():
+		latest_cards = [snapshot.current_card]
+	if latest_cards.is_empty():
+		online_center_cards.clear()
+		return
+
+	var seen_ids := {}
+	for card: CardData in online_center_cards:
+		seen_ids[card.card_id()] = true
+	for item in latest_cards:
+		var card: CardData = CardDataScript.from_dict(item)
+		if not seen_ids.has(card.card_id()):
+			online_center_cards.append(card)
+			seen_ids[card.card_id()] = true
+
 func _show_online_game() -> void:
 	page = "game"
 	if online_phase == "rps_result":
@@ -685,10 +719,7 @@ func _show_online_game() -> void:
 		serialized_cards = [online_snapshot.current_card]
 	for card_data in serialized_cards:
 		current_cards.append(CardDataScript.from_dict(card_data))
-	var played_pile: Array[CardData] = []
-	var serialized_pile: Array = online_snapshot.get("pile_cards", serialized_cards)
-	for card_data in serialized_pile:
-		played_pile.append(CardDataScript.from_dict(card_data))
+	var played_pile: Array[CardData] = online_center_cards.duplicate()
 	if played_pile.is_empty() and not current_cards.is_empty():
 		played_pile = current_cards.duplicate()
 	var combination: Dictionary = online_snapshot.get("combination", {})
@@ -1298,6 +1329,7 @@ func _on_server_message(message: Dictionary) -> void:
 			page = "game"
 			online_snapshot.clear()
 			online_center_card_ids.clear()
+			online_center_cards.clear()
 			online_round = int(payload.get("current_round", payload.get("round_number", online_round + 1)))
 			match_round_limit = int(payload.get("match_round_limit", match_round_limit))
 			_play_round_start_once(online_round)
@@ -1351,6 +1383,7 @@ func _on_server_message(message: Dictionary) -> void:
 				queued_turn_snapshot = payload.duplicate(true)
 				return
 			online_snapshot = payload
+			_sync_online_center_cards(payload)
 			online_phase = str(payload.get("phase", online_phase))
 			online_players = payload.get("players", online_players)
 			if page == "game":
