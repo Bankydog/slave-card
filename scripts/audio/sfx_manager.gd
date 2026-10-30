@@ -1,11 +1,15 @@
 extends Node
 
-const CARD_FLIP_SOUND: AudioStream = preload("res://assets/sound/flip-card.mp3")
+const CARD_FLIP_SOUND_PATH := "res://assets/sound/flip-card.mp3"
 
 var players: Array[AudioStreamPlayer] = []
+var _audio_enabled := false
+var _card_flip_sound: AudioStream
 
 func _ready() -> void:
-	_add_player()
+	_audio_enabled = DisplayServer.get_name() != "headless" and not OS.has_feature("dedicated_server")
+	if _audio_enabled:
+		_add_player()
 
 func play_ui_click() -> void:
 	pass
@@ -27,8 +31,14 @@ func play_sfx(name: String) -> void:
 			pass
 
 func _play_card_flip() -> void:
+	if not _audio_enabled:
+		return
+	if _card_flip_sound == null:
+		_card_flip_sound = load(CARD_FLIP_SOUND_PATH) as AudioStream
+	if _card_flip_sound == null:
+		return
 	var player := _available_player()
-	player.stream = CARD_FLIP_SOUND
+	player.stream = _card_flip_sound
 	player.play()
 
 func _available_player() -> AudioStreamPlayer:
