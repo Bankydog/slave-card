@@ -30,6 +30,10 @@ var lobby_ready_count := 0
 var lobby_human_count := 0
 var incoming_seat_swap: Dictionary = {}
 var outgoing_seat_swaps: Array = []
+var seat_swap_dialog: ConfirmationDialog
+var seat_swap_dialog_mode := ""
+var seat_swap_target_peer := 0
+var prompted_incoming_swap_id := -1
 var is_host := false
 var local_player_index := -1
 var online_player_index := -1
@@ -79,6 +83,11 @@ func _ready() -> void:
 	endpoint = ClientEndpointScript.new()
 	endpoint.name = "NetworkEndpoint"
 	add_child(endpoint)
+	seat_swap_dialog = ConfirmationDialog.new()
+	seat_swap_dialog.name = "SeatSwapDialog"
+	endpoint.add_child(seat_swap_dialog)
+	seat_swap_dialog.confirmed.connect(_on_seat_swap_dialog_confirmed)
+	seat_swap_dialog.canceled.connect(_on_seat_swap_dialog_canceled)
 	endpoint.message_received.connect(_on_server_message)
 	endpoint.connection_status_changed.connect(_on_connection_status)
 	request_timeout_timer = Timer.new()
@@ -430,15 +439,7 @@ func _show_lobby() -> void:
 	copy_button.pressed.connect(_copy_room_code.bind(copy_button))
 	code_row.add_child(copy_button)
 	root.add_child(code_row)
-	if not incoming_seat_swap.is_empty():
-		var request_row := HBoxContainer.new()
-		request_row.alignment = BoxContainer.ALIGNMENT_CENTER
-		var request_label := Label.new()
-		request_label.text = "%s wants to swap seats with you." % str(incoming_seat_swap.get("name", "A player"))
-		request_row.add_child(request_label)
-		_action_button(request_row, "Accept", func(): _send_request(Protocol.RESPOND_SEAT_SWAP, {"request_id": int(incoming_seat_swap.get("request_id", -1)), "accept": true}), 110)
-		_action_button(request_row, "Reject", func(): _send_request(Protocol.RESPOND_SEAT_SWAP, {"request_id": int(incoming_seat_swap.get("request_id", -1)), "accept": false}), 110)
-		root.add_child(request_row)
+	_show_incoming_seat_swap_dialog()
 	var count_label := Label.new()
 	count_label.text = "%d / %d humans connected  ·  Match: %d rounds" % [lobby_human_count, room_max_players, match_round_limit]
 	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -491,9 +492,9 @@ func _show_lobby() -> void:
 		ready_label.text = "LEFT" if bool(player.get("disconnected", false)) else ready_text
 		ready_label.add_theme_color_override("font_color", Color("#23723b") if bool(player.get("ready", false)) else Color("#a52a2a"))
 		card_row.add_child(ready_label)
-		card.disabled = is_bot or is_local or player_peer <= 0 or not outgoing_seat_swaps.is_empty() or not incoming_seat_swap.is_empty()
+		card.disabled = is_bot or is_local or player_peer <= 0
 		if not card.disabled:
-			card.pressed.connect(func(): _send_request(Protocol.REQUEST_SEAT_SWAP, {"target_peer_id": player_peer}))
+			card.pressed.connect(_open_seat_swap_request_dialog.bind(player_peer, str(player.get("name", "Guest"))))
 		grid.add_child(card)
 	if not outgoing_seat_swaps.is_empty():
 		var outgoing_label := Label.new()
@@ -531,6 +532,48 @@ func _show_lobby() -> void:
 	_status(root)
 	_enforce_text_minimum(root)
 	_style_lobby_controls(root)
+
+func _open_seat_swap_request_dialog(target_peer: int, target_name: String) -> void:
+	if request_in_flight or not is_instance_valid(seat_swap_dialog):
+		return
+	seat_swap_dialog_mode = "outgoing"
+	seat_swap_target_peer = target_peer
+	seat_swap_dialog.title = "Request Seat Swap"
+	seat_swap_dialog.dialog_text = "Request to swap seats with %s?" % target_name
+	seat_swap_dialog.get_ok_button().text = "Request"
+	seat_swap_dialog.get_cancel_button().text = "Cancel"
+	seat_swap_dialog.popup_centered()
+
+func _show_incoming_seat_swap_dialog() -> void:
+	if incoming_seat_swap.is_empty() or not is_instance_valid(seat_swap_dialog):
+		if incoming_seat_swap.is_empty():
+			prompted_incoming_swap_id = -1
+		return
+	var request_id := int(incoming_seat_swap.get("request_id", -1))
+	if request_id < 0 or request_id == prompted_incoming_swap_id:
+		return
+	prompted_incoming_swap_id = request_id
+	seat_swap_dialog_mode = "incoming"
+	seat_swap_target_peer = 0
+	seat_swap_dialog.title = "Seat Swap Request"
+	seat_swap_dialog.dialog_text = "%s wants to swap seats with you. Accept?" % str(incoming_seat_swap.get("name", "A player"))
+	seat_swap_dialog.get_ok_button().text = "Yes"
+	seat_swap_dialog.get_cancel_button().text = "No"
+	seat_swap_dialog.popup_centered()
+
+func _on_seat_swap_dialog_confirmed() -> void:
+	if seat_swap_dialog_mode == "outgoing" and seat_swap_target_peer > 0:
+		_send_request(Protocol.REQUEST_SEAT_SWAP, {"target_peer_id": seat_swap_target_peer})
+	elif seat_swap_dialog_mode == "incoming" and not incoming_seat_swap.is_empty():
+		_send_request(Protocol.RESPOND_SEAT_SWAP, {"request_id": int(incoming_seat_swap.get("request_id", -1)), "accept": true})
+	seat_swap_dialog_mode = ""
+	seat_swap_target_peer = 0
+
+func _on_seat_swap_dialog_canceled() -> void:
+	if seat_swap_dialog_mode == "incoming" and not incoming_seat_swap.is_empty():
+		_send_request(Protocol.RESPOND_SEAT_SWAP, {"request_id": int(incoming_seat_swap.get("request_id", -1)), "accept": false})
+	seat_swap_dialog_mode = ""
+	seat_swap_target_peer = 0
 
 func _style_lobby_card_background(card: Button) -> void:
 	var normal := StyleBoxFlat.new()
@@ -1252,6 +1295,7 @@ func _on_server_message(message: Dictionary) -> void:
 			if page == "lobby" or page == "create" or page == "join" or (page == "final_results" and str(payload.get("phase", "")) == "lobby"):
 				_show_lobby()
 		Protocol.START_GAME:
+			page = "game"
 			online_snapshot.clear()
 			online_center_card_ids.clear()
 			online_round = int(payload.get("current_round", payload.get("round_number", online_round + 1)))
@@ -1261,6 +1305,9 @@ func _on_server_message(message: Dictionary) -> void:
 			online_phase = str(payload.get("phase", "playing"))
 			online_players = payload.get("players", online_players)
 			online_roles = payload.get("roles_by_player", online_roles)
+			online_hand.clear()
+			selected_card_ids.clear()
+			_show_online_game()
 		Protocol.DEAL:
 			online_player_index = int(payload.get("player_index", online_player_index))
 			online_round = int(payload.get("current_round", payload.get("round_number", online_round)))

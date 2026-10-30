@@ -210,7 +210,7 @@ func _request_seat_swap(peer_id: int, payload: Dictionary) -> void:
 		_reject(peer_id, "Seat swaps are only available between human players.")
 		return
 	if _peer_in_pending_swap(room, peer_id) or _peer_in_pending_swap(room, target_peer):
-		_reject(peer_id, "One of those players already has a pending seat swap.")
+		_reject(peer_id, "A seat swap involving one of those players is already pending. Wait for that request to be answered before trying again.")
 		return
 	var request_id := int(room.next_swap_id)
 	room.next_swap_id = request_id + 1
