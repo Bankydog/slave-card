@@ -120,7 +120,7 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 			center_pile.queue_free()
 			center_pile = null
 		if not cards.is_empty():
-			center_pile = CardViewScript.make_pile(cards, compact_view, layout_scale * 1.6)
+			center_pile = CardViewScript.make_pile(cards, compact_view, layout_scale * 1.6, newly_played_cards)
 			center_group.add_child(center_pile)
 			center_pile.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			if played_by >= 0 and played_by < players.size():
@@ -141,10 +141,15 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 	if cards.is_empty() or played_by < 0 or played_by >= seat_widgets.size() or not is_instance_valid(center_pile):
 		return
 	var animation_token := play_animation_id
+	var flight_scale := layout_scale * 1.6
+	var landing_layout: Dictionary = CardViewScript.get_play_landing_layout(cards, compact_view, flight_scale)
+	var ordered_cards: Array = landing_layout.cards
 	var pile_cards: Control = center_pile.get_child(0)
-	for i in range(cards.size()):
-		var target_index := pile_cards.get_child_count() - cards.size() + i
-		var target_card := pile_cards.get_child(target_index) as Control
+	var target_cards_by_id := {}
+	for target_card in pile_cards.get_children():
+		target_cards_by_id[target_card.card.card_id()] = target_card
+	for card: CardData in ordered_cards:
+		var target_card: Control = target_cards_by_id[card.card_id()]
 		target_card.modulate = Color(1.0, 1.0, 1.0, 0.0)
 		animated_pile_targets.append(target_card)
 	await get_tree().process_frame
@@ -152,17 +157,18 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 		return
 	var source_global := seat_widgets[played_by].get_global_rect().get_center()
 	var source := play_flight_layer.get_global_transform().affine_inverse() * source_global
-	var flight_scale := layout_scale * 1.6
 	var card_width := (42.0 if compact_view else 58.0) * flight_scale
 	var card_height := (64.0 if compact_view else 92.0) * flight_scale
 	var stagger := 0.035
 	var sound_duration := CARD_FLIP_SOUND.get_length()
-	var flight_duration := maxf(0.1, sound_duration - stagger * float(cards.size() - 1))
+	var flight_duration := maxf(0.1, sound_duration - stagger * float(ordered_cards.size() - 1))
 	play_animation_tween = create_tween()
 	play_animation_tween.set_parallel(true)
-	for i in range(cards.size()):
+	for i in range(ordered_cards.size()):
+		var card: CardData = ordered_cards[i]
+		var target_card: Control = target_cards_by_id[card.card_id()]
 		var flight_card = CardViewScript.new()
-		flight_card.setup(cards[i], false, compact_view, flight_scale)
+		flight_card.setup(card, false, compact_view, flight_scale)
 		flight_card.set_available(true)
 		flight_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		flight_card.size = Vector2(card_width, card_height)
@@ -170,8 +176,6 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 		flight_card.position = source - Vector2(card_width, card_height) * 0.5
 		flight_card.scale = Vector2(0.58, 0.58)
 		play_flight_layer.add_child(flight_card)
-		var target_index := pile_cards.get_child_count() - cards.size() + i
-		var target_card := pile_cards.get_child(target_index) as Control
 		var destination := play_flight_layer.get_global_transform().affine_inverse() * target_card.global_position
 		var delay := float(i) * stagger
 		play_animation_tween.tween_property(flight_card, "position", destination, flight_duration).set_delay(delay).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)

@@ -983,36 +983,68 @@ func _test_play_animation_pile() -> void:
 	await get_tree().process_frame
 	var play_groups: Array = [
 		[_card("J", "Hearts")],
-		[_card("4", "Clubs"), _card("4", "Hearts")],
-		[_card("5", "Clubs"), _card("5", "Hearts"), _card("5", "Spades")],
-		[_card("6", "Clubs"), _card("7", "Hearts"), _card("8", "Spades"), _card("9", "Diamonds"), _card("10", "Clubs")],
-		[_card("Q", "Clubs"), _card("Q", "Hearts"), _card("Q", "Spades"), _card("Q", "Diamonds")],
-		[_card("3", "Diamonds"), _card("4", "Diamonds"), _card("5", "Diamonds"), _card("6", "Diamonds"), _card("7", "Diamonds")],
-		[_card("7", "Spades"), _card("7", "Diamonds"), _card("8", "Clubs"), _card("8", "Diamonds"), _card("9", "Hearts"), _card("9", "Clubs")]
+		[_card("4", "Hearts"), _card("4", "Clubs")],
+		[_card("5", "Spades"), _card("5", "Clubs"), _card("5", "Hearts")],
+		[_card("10", "Clubs"), _card("7", "Hearts"), _card("9", "Diamonds"), _card("6", "Clubs"), _card("8", "Spades")],
+		[_card("Q", "Spades"), _card("Q", "Clubs"), _card("Q", "Diamonds"), _card("Q", "Hearts")],
+		[_card("7", "Diamonds"), _card("3", "Diamonds"), _card("6", "Diamonds"), _card("4", "Diamonds"), _card("5", "Diamonds")],
+		[_card("A", "Diamonds"), _card("K", "Spades"), _card("2", "Clubs"), _card("K", "Clubs"), _card("A", "Clubs"), _card("2", "Diamonds")]
 	]
-	for play_group: Array in play_groups:
+	var expected_types := ["Single", "Pair", "Triple", "Straight", "Four of a Kind", "Straight Flush", "Pair Sequence"]
+	for group_index in range(play_groups.size()):
+		var play_group: Array = play_groups[group_index]
 		var next_pile := pile_cards.duplicate()
 		next_pile.append_array(play_group)
 		animated_table.configure(seats, 0, 1, [], next_pile, "Play", true, 1, play_group)
 		var pile_layer: Control = animated_table.center_pile.get_child(0)
+		var factor: float = animated_table.layout_scale * 1.6
+		var landing: Dictionary = CardViewScript.get_play_landing_layout(play_group, true, factor)
+		var targets_by_id := {}
+		for target_card in pile_layer.get_children():
+			targets_by_id[target_card.card.card_id()] = target_card
+		var type_matches: bool = str(landing.combo_type) == expected_types[group_index]
 		var existing_pile_visible := true
-		for i in range(pile_cards.size()):
-			existing_pile_visible = existing_pile_visible and is_equal_approx((pile_layer.get_child(i) as Control).modulate.a, 1.0)
+		for card: CardData in pile_cards:
+			existing_pile_visible = existing_pile_visible and is_equal_approx(float(targets_by_id[card.card_id()].modulate.a), 1.0)
 		var incoming_cards_hidden := true
-		for i in range(play_group.size()):
-			var target := pile_layer.get_child(pile_cards.size() + i) as Control
-			incoming_cards_hidden = incoming_cards_hidden and is_zero_approx(target.modulate.a)
-		_check(existing_pile_visible and incoming_cards_hidden and is_equal_approx(animated_table.center_pile.modulate.a, 1.0), "existing pile stays visible underneath %d animated card(s)" % play_group.size())
+		for card: CardData in play_group:
+			incoming_cards_hidden = incoming_cards_hidden and is_zero_approx(float(targets_by_id[card.card_id()].modulate.a))
+		var ordered_positions_match := true
+		var layout_width := float(pile_layer.custom_minimum_size.x)
+		var layout_height := float(pile_layer.custom_minimum_size.y)
+		var card_width: float = 42.0 * factor
+		var card_height: float = 64.0 * factor
+		var center := Vector2((layout_width - card_width) * 0.5, (layout_height - card_height) * 0.5)
+		for i in range(landing.cards.size()):
+			var card: CardData = landing.cards[i]
+			var target_card: Control = targets_by_id[card.card_id()]
+			var expected_position: Vector2 = center + landing.offsets[i]
+			ordered_positions_match = ordered_positions_match and target_card.position.is_equal_approx(expected_position)
+			if i > 0:
+				var previous: CardData = landing.cards[i - 1]
+				ordered_positions_match = ordered_positions_match and targets_by_id[previous.card_id()].position.x < target_card.position.x
+		_check(type_matches and ordered_positions_match, "%s uses sorted, distinct shared landing positions" % expected_types[group_index])
+		_check(existing_pile_visible, "all earlier plays remain visible underneath the newest %d-card play" % play_group.size())
+		_check(incoming_cards_hidden, "newly played targets remain hidden while their flight cards animate")
+		_check(is_equal_approx(animated_table.center_pile.modulate.a, 1.0), "center pile container remains fully visible during card flight")
 		while animated_table.play_animation_tween == null:
 			await get_tree().process_frame
-		_check(animated_table.play_flight_layer.get_child_count() == play_group.size(), "flight layer contains only the %d newly played card(s)" % play_group.size())
+		var flight_cards_match_order: bool = animated_table.play_flight_layer.get_child_count() == landing.cards.size()
+		for i in range(landing.cards.size()):
+			var flight_card: CardView = animated_table.play_flight_layer.get_child(i)
+			flight_cards_match_order = flight_cards_match_order and flight_card.card.card_id() == landing.cards[i].card_id()
+		_check(flight_cards_match_order, "flight layer animates each card in its deterministic landing order")
+		var saved_positions := {}
+		for card: CardData in landing.cards:
+			saved_positions[card.card_id()] = targets_by_id[card.card_id()].position
 		var flight_tween: Tween = animated_table.play_animation_tween
 		await flight_tween.finished
 		await get_tree().process_frame
-		var pile_committed := true
-		for child in animated_table.center_pile.get_child(0).get_children():
-			pile_committed = pile_committed and is_equal_approx((child as Control).modulate.a, 1.0)
-		_check(pile_committed and animated_table.play_flight_layer.get_child_count() == 0, "animated play commits into the persistent pile after flight")
+		var pile_committed: bool = animated_table.play_flight_layer.get_child_count() == 0
+		for card: CardData in landing.cards:
+			var target: Control = targets_by_id[card.card_id()]
+			pile_committed = pile_committed and is_equal_approx(float(target.modulate.a), 1.0) and target.position.is_equal_approx(saved_positions[card.card_id()])
+		_check(pile_committed, "animation finishes at the same positions as the persistent pile")
 		pile_cards = next_pile
 	animated_table.configure(seats, 0, 1, [], [], "Lead a combination", true)
 	_check(animated_table.center_pile == null and animated_table.center_title.visible, "trick reset clears the persistent center pile")

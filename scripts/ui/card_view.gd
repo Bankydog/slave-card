@@ -10,6 +10,8 @@ var face_overlay: Control
 var top_rank: Label
 var center_suit: TextureRect
 
+const GameRulesScript = preload("res://scripts/game/game_rules.gd")
+
 const SUIT_TEXTURES := {
 	"Clubs": preload("res://assets/suits/clubs.png"),
 	"Diamonds": preload("res://assets/suits/diamonds.png"),
@@ -120,11 +122,107 @@ static func add_hand_slot(container: Container, view: CardView, compact: bool = 
 	slot.add_child(view)
 	container.add_child(slot)
 
-static func make_pile(cards: Array, compact: bool = false, scale_factor: float = 1.0) -> Control:
+static func get_play_landing_layout(cards: Array, compact: bool = false, scale_factor: float = 1.0) -> Dictionary:
+	var ordered_cards: Array = cards.duplicate()
+	ordered_cards.sort_custom(_visual_card_less)
+	var factor := maxf(0.35, scale_factor)
+	var card_width := (42.0 if compact else 58.0) * factor
+	var rules = GameRulesScript.new()
+	var classification: Dictionary = rules.classify(ordered_cards)
+	var combo_type := str(classification.get("type", ""))
+	var pair_sequence := _is_visual_pair_sequence(ordered_cards)
+	if pair_sequence:
+		combo_type = "Pair Sequence"
+
+	var advances: Array[float] = []
+	var total_advance := 0.0
+	for i in range(1, ordered_cards.size()):
+		var step := 0.5
+		if pair_sequence:
+			var previous: CardData = ordered_cards[i - 1]
+			var current: CardData = ordered_cards[i]
+			step = 0.38 if previous.strength() == current.strength() else 0.66
+		else:
+			match combo_type:
+				"Single":
+					step = 0.0
+				"Pair":
+					step = 0.50
+				"Triple":
+					step = 0.52
+				"Four of a Kind":
+					step = 0.54
+				"Straight", "Straight Flush":
+					step = 0.58
+		var step_pixels := card_width * step
+		advances.append(step_pixels)
+		total_advance += step_pixels
+
+	var offsets: Array[Vector2] = []
+	var rotations: Array[float] = []
+	var cursor := 0.0
+	for i in range(ordered_cards.size()):
+		var vertical_offset := 0.0
+		if pair_sequence:
+			vertical_offset = (-1.0 if i % 2 == 0 else 1.0) * card_width * 0.015
+		offsets.append(Vector2(cursor - total_advance * 0.5, vertical_offset))
+		rotations.append(0.0)
+		if i < advances.size():
+			cursor += advances[i]
+
+	return {
+		"cards": ordered_cards,
+		"offsets": offsets,
+		"rotations": rotations,
+		"combo_type": combo_type,
+		"width": card_width + total_advance
+	}
+
+static func _visual_card_less(card_a: CardData, card_b: CardData) -> bool:
+	if card_a.strength() != card_b.strength():
+		return card_a.strength() < card_b.strength()
+	var suit_a := CardData.SUITS.find(card_a.suit)
+	var suit_b := CardData.SUITS.find(card_b.suit)
+	if suit_a != suit_b:
+		return suit_a < suit_b
+	if card_a.deck_index != card_b.deck_index:
+		return card_a.deck_index < card_b.deck_index
+	return card_a.card_id() < card_b.card_id()
+
+static func _is_visual_pair_sequence(cards: Array) -> bool:
+	if cards.size() < 4 or cards.size() % 2 != 0:
+		return false
+	var rank_counts := {}
+	for card: CardData in cards:
+		var rank := card.strength()
+		rank_counts[rank] = int(rank_counts.get(rank, 0)) + 1
+	if rank_counts.size() * 2 != cards.size():
+		return false
+	var ranks: Array = rank_counts.keys()
+	ranks.sort()
+	for rank in ranks:
+		if int(rank_counts[rank]) != 2:
+			return false
+	for i in range(1, ranks.size()):
+		if int(ranks[i]) != int(ranks[i - 1]) + 1:
+			return false
+	return true
+
+static func make_pile(cards: Array, compact: bool = false, scale_factor: float = 1.0, latest_play_cards: Array = []) -> Control:
 	var factor := maxf(0.35, scale_factor)
 	var card_width := (42.0 if compact else 58.0) * factor
 	var card_height := (64.0 if compact else 92.0) * factor
-	var pile_width := card_width + (86.0 if compact else 112.0) * factor
+	var layout := get_play_landing_layout(latest_play_cards, compact, factor) if not latest_play_cards.is_empty() else {}
+	var latest_offsets: Dictionary = {}
+	var latest_rotations: Dictionary = {}
+	var latest_order: Dictionary = {}
+	for i in range(layout.get("cards", []).size()):
+		var card: CardData = layout.cards[i]
+		latest_offsets[card.card_id()] = layout.offsets[i]
+		latest_rotations[card.card_id()] = layout.rotations[i]
+		latest_order[card.card_id()] = i
+	var base_width := card_width + (86.0 if compact else 112.0) * factor
+	var pile_width := maxf(base_width, float(layout.get("width", 0.0)) + 16.0 * factor)
 	var pile_height := card_height + (62.0 if compact else 82.0) * factor
 	var frame := CenterContainer.new()
 	frame.name = "CenterCardPile"
@@ -138,15 +236,22 @@ static func make_pile(cards: Array, compact: bool = false, scale_factor: float =
 	var rotations := [-8.0, 5.5, -2.0, 9.0, -5.0, 2.0, 7.0, -10.0, 3.5, -4.0, 11.0, -6.5]
 	var x_offsets := [-30.0, 8.0, 24.0, -17.0, 35.0, -4.0, -36.0, 16.0, 29.0, -25.0, 2.0, 38.0]
 	var y_offsets := [-13.0, 10.0, -5.0, 20.0, -18.0, 4.0, 16.0, -22.0, 7.0, 23.0, -10.0, 1.0]
+	var center := Vector2((pile_width - card_width) * 0.5, (pile_height - card_height) * 0.5)
 	for i in range(cards.size()):
+		var card: CardData = cards[i]
 		var view: CardView = CardView.new()
-		view.setup(cards[i], false, compact, factor)
+		view.setup(card, false, compact, factor)
 		view.size = Vector2(card_width, card_height)
 		view.pivot_offset = Vector2(card_width * 0.5, card_height * 0.5)
-		var pattern_index := i % rotations.size()
-		var center := Vector2((pile_width - card_width) * 0.5, (pile_height - card_height) * 0.5)
-		view.position = center + Vector2(x_offsets[pattern_index], y_offsets[pattern_index]) * factor
-		view.rotation_degrees = rotations[pattern_index]
-		view.z_index = i
+		var card_id := card.card_id()
+		if latest_offsets.has(card_id):
+			view.position = center + latest_offsets[card_id]
+			view.rotation_degrees = float(latest_rotations[card_id])
+			view.z_index = cards.size() + int(latest_order[card_id])
+		else:
+			var pattern_index := i % rotations.size()
+			view.position = center + Vector2(x_offsets[pattern_index], y_offsets[pattern_index]) * factor
+			view.rotation_degrees = rotations[pattern_index]
+			view.z_index = i
 		pile.add_child(view)
 	return frame
