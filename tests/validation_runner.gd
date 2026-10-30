@@ -40,7 +40,9 @@ func _ready() -> void:
 	_test_bot_combinations()
 	_test_server_ready_authority()
 	_test_server_seat_swaps()
+	_test_server_lobby_presence()
 	_test_server_disconnect_forfeit()
+	_test_start_game_client_feedback()
 	_test_multiple_disconnect_order()
 	_test_match_state_scoring()
 	_test_server_match_flow(4, 960)
@@ -189,6 +191,82 @@ func _test_server_seat_swaps() -> void:
 	service.handle_message(1202, {"type":Protocol.LEAVE_ROOM, "payload":{}})
 	_check(pending_before_leave == 1 and service.rooms[code].pending_seat_swaps.is_empty(), "leaving player clears pending seat swap requests")
 
+func _test_server_lobby_presence() -> void:
+	var guest_leave_service = RoomServiceScript.new()
+	guest_leave_service.send_to_peer.connect(_capture_message)
+	guest_leave_service.handle_message(1501, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":3}})
+	var guest_leave_code := str(_last_message(1501, Protocol.ROOM_CREATED).payload.room_code)
+	guest_leave_service.handle_message(1502, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Guest", "room_code":guest_leave_code}})
+	_ready_peers(guest_leave_service, [1501, 1502])
+	guest_leave_service.handle_message(1501, {"type":Protocol.REQUEST_SEAT_SWAP, "payload":{"target_peer_id":1502}})
+	guest_leave_service.handle_message(1502, {"type":Protocol.LEAVE_ROOM, "payload":{}})
+	var guest_leave_room: Dictionary = guest_leave_service.rooms[guest_leave_code]
+	var host_snapshot: Dictionary = _last_message(1501, Protocol.LOBBY_STATE).payload
+	var guest_leave_ack: Dictionary = _last_message(1502, Protocol.ROOM_LEFT).payload
+	_check(guest_leave_room.members.size() == 1 and not guest_leave_service.room_by_peer.has(1502), "guest leave removes the guest from authoritative lobby membership")
+	_check(host_snapshot.players.size() == 1 and int(host_snapshot.ready_count) == 1, "remaining host receives a fresh lobby snapshot without the guest or stale ready count")
+	_check(guest_leave_room.pending_seat_swaps.is_empty() and str(guest_leave_ack.reason) == "You left the room.", "guest leave clears involving seat swaps and acknowledges the leaver")
+
+	var host_leave_service = RoomServiceScript.new()
+	host_leave_service.send_to_peer.connect(_capture_message)
+	host_leave_service.handle_message(1511, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":2}})
+	var host_leave_code := str(_last_message(1511, Protocol.ROOM_CREATED).payload.room_code)
+	host_leave_service.handle_message(1512, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Guest", "room_code":host_leave_code}})
+	host_leave_service.handle_message(1511, {"type":Protocol.LEAVE_ROOM, "payload":{}})
+	var host_closed: Dictionary = _last_message(1512, Protocol.ROOM_CLOSED).payload
+	_check(not host_leave_service.rooms.has(host_leave_code) and not host_leave_service.room_by_peer.has(1511) and not host_leave_service.room_by_peer.has(1512), "host leave closes the lobby without transferring host ownership")
+	_check(str(host_closed.reason) == "The host left the room.", "remaining guest receives the clear host-left event")
+
+	var guest_disconnect_service = RoomServiceScript.new()
+	guest_disconnect_service.send_to_peer.connect(_capture_message)
+	guest_disconnect_service.handle_message(1521, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":2}})
+	var guest_disconnect_code := str(_last_message(1521, Protocol.ROOM_CREATED).payload.room_code)
+	guest_disconnect_service.handle_message(1522, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Guest", "room_code":guest_disconnect_code}})
+	_ready_peers(guest_disconnect_service, [1521, 1522])
+	guest_disconnect_service.peer_disconnected(1522)
+	var disconnect_snapshot: Dictionary = _last_message(1521, Protocol.LOBBY_STATE).payload
+	_check(guest_disconnect_service.rooms[guest_disconnect_code].members.size() == 1 and disconnect_snapshot.players.size() == 1 and int(disconnect_snapshot.ready_count) == 1, "guest disconnect removes the player and ready state and broadcasts a fresh snapshot")
+
+	var host_disconnect_service = RoomServiceScript.new()
+	host_disconnect_service.send_to_peer.connect(_capture_message)
+	host_disconnect_service.handle_message(1531, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":2}})
+	var host_disconnect_code := str(_last_message(1531, Protocol.ROOM_CREATED).payload.room_code)
+	host_disconnect_service.handle_message(1532, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Guest", "room_code":host_disconnect_code}})
+	host_disconnect_service.peer_disconnected(1531)
+	var disconnect_closed: Dictionary = _last_message(1532, Protocol.ROOM_CLOSED).payload
+	_check(not host_disconnect_service.rooms.has(host_disconnect_code) and not host_disconnect_service.room_by_peer.has(1532), "host disconnect removes the room and all lobby peer mappings")
+	_check(str(disconnect_closed.reason) == "The host left the room.", "host disconnect notifies guests with the same host-left reason")
+
+func _test_start_game_client_feedback() -> void:
+	var flow = MultiplayerFlowScript.new()
+	flow.page = "lobby"
+	flow.is_host = true
+	flow.room_code = "TEST01"
+	flow.room_players = [
+		{"peer_id":1601, "player_index":0, "name":"Host", "is_host":true, "ready":true},
+		{"peer_id":1602, "player_index":1, "name":"Guest", "ready":true}
+	]
+	flow.lobby_all_ready = true
+	add_child(flow)
+	flow._show_lobby()
+	flow.request_in_flight = true
+	flow.request_type_in_flight = Protocol.START_GAME
+	flow._on_server_message({"type":Protocol.ACTION_REJECTED, "payload":{"reason":"Only the host can start the game."}})
+	var start_button := flow.find_child("Action_StartGame", true, false) as Button
+	_check(not flow.request_in_flight and flow.status_text == "Only the host can start the game." and start_button != null and not start_button.disabled, "server rejection shows its reason and restores Start Game controls")
+	flow.request_in_flight = true
+	flow.request_type_in_flight = Protocol.START_GAME
+	flow.request_timeout_timer.wait_time = 8.0
+	flow._on_request_timeout()
+	start_button = flow.find_child("Action_StartGame", true, false) as Button
+	_check(not flow.request_in_flight and flow.status_text == "Start Game timed out. Please try again." and start_button != null and not start_button.disabled, "Start Game timeout exits pending state and restores lobby controls")
+	flow.request_in_flight = true
+	flow.request_type_in_flight = Protocol.START_GAME
+	flow.request_timeout_timer.start(8.0)
+	flow._on_server_message({"type":Protocol.START_GAME, "payload":{"current_round":1, "match_round_limit":4, "phase":"playing", "players":[]}})
+	_check(flow.page == "game" and not flow.request_in_flight and not flow.request_timeout_timer.time_left, "successful Start Game cancels its timeout and transitions into gameplay")
+	flow.free()
+
 func _test_server_disconnect_forfeit() -> void:
 	var service = RoomServiceScript.new()
 	service.send_to_peer.connect(_capture_message)
@@ -260,8 +338,12 @@ func _test_server_ready_authority() -> void:
 	service.handle_message(910, {"type":Protocol.START_GAME, "payload":{"fill_bots":true}})
 	_check(service.rooms[code].phase == "lobby", "new Not Ready player blocks server start even with bot fill")
 	service.handle_message(912, {"type":Protocol.SET_READY, "payload":{"ready":true}})
+	service.handle_message(911, {"type":Protocol.START_GAME, "payload":{"fill_bots":true}})
+	_check(service.rooms[code].phase == "lobby" and str(_last_message(911, Protocol.ACTION_REJECTED).payload.reason) == "Only the host can start the game.", "non-host Start Game request receives an explicit rejection")
 	service.handle_message(910, {"type":Protocol.START_GAME, "payload":{"fill_bots":true}})
 	_check(service.rooms[code].phase == "playing" and service.rooms[code].members.size() == 4 and bool(service.rooms[code].members[3].get("ready", false)), "all Ready humans can start and bots are automatically Ready")
+	service.handle_message(910, {"type":Protocol.START_GAME, "payload":{"fill_bots":true}})
+	_check(service.rooms[code].match_state.current_round == 1 and str(_last_message(910, Protocol.ACTION_REJECTED).payload.reason) == "The game is already running.", "duplicate Start Game request is rejected without initializing a second match")
 	var host_lobby := _last_message(910, Protocol.LOBBY_STATE)
 	var guest_lobby := _last_message(911, Protocol.LOBBY_STATE)
 	_check(host_lobby.payload.all_ready and guest_lobby.payload.all_ready and host_lobby.payload.ready_count == guest_lobby.payload.ready_count, "readiness summary is broadcast identically to clients")
@@ -781,8 +863,10 @@ func _test_table_presentation() -> void:
 		var layout: Dictionary = TableLayoutScript.layout_for_viewport(viewport_size)
 		var table_rect: Rect2 = layout.table_zone
 		_check(table_rect.size.x == table_rect.size.y and table_rect.position.x >= layout.canvas_origin.x, "square table fits centered at viewport %s" % viewport_size)
-	var square_table: AtlasTexture = TablePresentationScript.table_square_texture()
-	_check(TablePresentationScript.TABLE_SOURCE.get_width() > TablePresentationScript.TABLE_SOURCE.get_height() and is_equal_approx(square_table.get_width(), square_table.get_height()), "landscape room art is cropped to a centered square table texture")
+	var presentation = TablePresentationScript.new()
+	add_child(presentation)
+	_check(not presentation.table_artwork.visible, "table presentation avoids a second cropped square copy over the full-screen room artwork")
+	presentation.free()
 	var two_seats := TablePresentationScript.normalized_seat_positions(2)
 	_check(two_seats[0].is_equal_approx(Vector2(0.5, 0.9)) and two_seats[1].is_equal_approx(Vector2(0.5, 0.1)), "two-player seating places the opponent North of local South")
 	var three_seats := TablePresentationScript.normalized_seat_positions(3)
@@ -885,8 +969,8 @@ func _test_lobby_visual_styles() -> void:
 	var leave_button := flow.find_child("Action_LeaveRoom", true, false) as Button
 	var leave_style := leave_button.get_theme_stylebox("normal") as StyleBoxFlat
 	_check(leave_style.bg_color == Color("#791e1e") and leave_button.get_theme_color("font_color") == Color.WHITE, "Leave Room uses dark red and white text")
-	var ready_label := flow.find_child("LobbyReadyState", true, false) as Label
-	_check(ready_label.get_theme_color("font_color") == Color("#23723b"), "Ready player state uses clear green text")
+	var ready_icon := flow.find_child("LobbyReadyState", true, false) as TextureRect
+	_check(ready_icon != null and ready_icon.texture != null and ready_icon.texture.resource_path.ends_with("check.png"), "Ready player state uses the check icon")
 	flow.free()
 
 func _test_bot_combinations() -> void:

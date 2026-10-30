@@ -55,6 +55,7 @@ func handle_message(peer_id: int, message: Dictionary) -> void:
 			_reject(peer_id, "Unknown action.")
 
 func peer_disconnected(peer_id: int) -> void:
+	print("[MP Server] Peer disconnected: peer=%d." % peer_id)
 	_leave_room(peer_id, true)
 
 func tick(delta: float) -> void:
@@ -140,6 +141,7 @@ func _join_room(peer_id: int, payload: Dictionary) -> void:
 	var member := {"peer_id": peer_id, "name": _guest_name(str(payload.get("name", ""))), "is_bot": false, "ready": false}
 	room.members.append(member)
 	room_by_peer[peer_id] = code
+	print("[MP Server] Peer joined lobby: peer=%d players=%d." % [peer_id, room.members.size()])
 	var player_index: int = room.members.size() - 1
 	_broadcast(room, Protocol.PLAYER_JOINED, {"player_index": player_index, "name": member.name})
 	_broadcast_lobby(room)
@@ -148,6 +150,7 @@ func _leave_room(peer_id: int, disconnected: bool = false) -> void:
 	if not room_by_peer.has(peer_id):
 		return
 	var code: String = room_by_peer[peer_id]
+	print("[MP Server] Peer leave request: peer=%d disconnected=%s." % [peer_id, str(disconnected)])
 	room_by_peer.erase(peer_id)
 	if not rooms.has(code):
 		return
@@ -162,26 +165,42 @@ func _leave_room(peer_id: int, disconnected: bool = false) -> void:
 	var departed: Dictionary = room.members[departed_index]
 	_clear_swaps_for_peer(room, peer_id)
 	if room.phase == "lobby":
+		if int(room.host_peer) == peer_id:
+			print("[MP Server] Lobby host left; closing room with %d guests." % maxi(0, room.members.size() - 1))
+			for member in room.members:
+				var remaining_peer := int(member.get("peer_id", 0))
+				if remaining_peer <= 0 or remaining_peer == peer_id:
+					continue
+				_send(remaining_peer, Protocol.ROOM_CLOSED, {"reason": "The host left the room."})
+				room_by_peer.erase(remaining_peer)
+			if not disconnected:
+				_send(peer_id, Protocol.ROOM_LEFT, {"reason": "You left the room."})
+			rooms.erase(code)
+			return
 		room.members.remove_at(departed_index)
+		print("[MP Server] Lobby player removed: peer=%d players=%d." % [peer_id, room.members.size()])
+		if not disconnected:
+			_send(peer_id, Protocol.ROOM_LEFT, {"reason": "You left the room."})
 		if room.members.is_empty():
 			rooms.erase(code)
 			return
-		if int(room.host_peer) == peer_id:
-			room.host_peer = int(room.members[0].peer_id)
-	else:
-		departed.peer_id = 0
-		departed.disconnected = true
-		departed.forfeited_this_round = room.phase in ["playing", "card_exchange", "rps_tiebreak", "rps_result"]
-		departed.ready = false
-		if int(room.host_peer) == peer_id:
-			room.host_peer = _first_connected_peer(room)
-		if room.phase == "playing" and room.game_state != null:
-			room.game_state.forfeit_player(departed_index)
-			_after_action(room)
-		elif room.phase in ["card_exchange", "rps_tiebreak", "rps_result"] and room.game_state != null:
-			_resolve_preplay_forfeit(room, departed_index)
+		_broadcast_lobby(room)
+		return
+	departed.peer_id = 0
+	departed.disconnected = true
+	departed.forfeited_this_round = room.phase in ["playing", "card_exchange", "rps_tiebreak", "rps_result"]
+	departed.ready = false
+	if int(room.host_peer) == peer_id:
+		room.host_peer = _first_connected_peer(room)
+	if room.phase == "playing" and room.game_state != null:
+		room.game_state.forfeit_player(departed_index)
+		_after_action(room)
+	elif room.phase in ["card_exchange", "rps_tiebreak", "rps_result"] and room.game_state != null:
+		_resolve_preplay_forfeit(room, departed_index)
 	_broadcast(room, Protocol.PLAYER_LEFT, {"player_index": departed_index, "name": departed.name, "disconnected": disconnected})
 	_broadcast_lobby(room)
+	if not disconnected:
+		_send(peer_id, Protocol.ROOM_LEFT, {"reason": "You left the room."})
 
 func _peer_in_pending_swap(room: Dictionary, peer_id: int) -> bool:
 	for request in room.get("pending_seat_swaps", []):
@@ -277,30 +296,45 @@ func _start_game(peer_id: int, payload: Dictionary) -> void:
 		_reject_start_game(peer_id, "Only the host can start the game.")
 		return
 	if room.phase != "lobby":
-		_reject_start_game(peer_id, "The game is already running.")
+		_reject_start_game(peer_id, "The game is already starting." if room.phase == "starting" else "The game is already running.")
 		return
 	if not _all_humans_ready(room):
 		_reject_start_game(peer_id, "All human players must be Ready before starting.")
 		return
+	var original_member_count: int = room.members.size()
 	var fill_bots := bool(payload.get("fill_bots", false))
-	var final_count: int = int(room.max_players) if fill_bots else room.members.size()
+	var final_count: int = int(room.max_players) if fill_bots else original_member_count
 	if final_count < 2:
 		_reject_start_game(peer_id, "At least two seats are needed. Add bots or invite a player.")
 		return
+	var match_state = MatchStateScript.new()
+	if not match_state.begin(final_count, int(room.match_round_limit)):
+		_reject_start_game(peer_id, "The match configuration is invalid.")
+		return
+	print("[MP Server] Start Game validation passed: peer=%d." % peer_id)
+	room.phase = "starting"
+	print("[MP Server] Room marked starting.")
 	room.pending_seat_swaps.clear()
 	if fill_bots:
 		while room.members.size() < int(room.max_players):
 			room.members.append({"peer_id": 0, "name": "Bot %d" % next_bot_name, "is_bot": true, "ready": true})
 			next_bot_name += 1
-	if not room.match_state.begin(final_count, int(room.match_round_limit)):
-		_reject_start_game(peer_id, "The match configuration is invalid.")
-		return
-	print("[MP Server] Start Game validation passed.")
+	room.match_state = match_state
 	room.round_number = 0
 	room.roles_by_player.clear()
 	for member in room.members:
 		member["role"] = ""
 	_start_round(room)
+	if room.phase == "starting":
+		room.phase = "lobby"
+		room.members.resize(original_member_count)
+		room.match_state = MatchStateScript.new()
+		room.round_number = 0
+		room.game_state = null
+		room.exchange = null
+		room.roles_by_player.clear()
+		_reject_start_game(peer_id, "Could not initialize the first round. Please try again.")
+		_broadcast_lobby(room)
 
 func _rematch(peer_id: int) -> void:
 	var room = _room_for_peer(peer_id)
@@ -427,6 +461,8 @@ func _start_round(room: Dictionary) -> void:
 	else:
 		room.exchange = null
 	room.phase = phase
+	if room.round_number == 1:
+		print("[MP Server] Initial game state created; room phase=%s." % room.phase)
 	print("[MP Server] Broadcasting Start Game; players=%d round=%d." % [room.members.size(), room.round_number])
 	_broadcast(room, Protocol.START_GAME, {
 		"room_code": room.code,
@@ -780,6 +816,7 @@ func _public_players(room: Dictionary) -> Array[Dictionary]:
 	return result
 
 func _broadcast_lobby(room: Dictionary) -> void:
+	print("[MP Server] Broadcasting lobby snapshot: players=%d phase=%s." % [room.members.size(), str(room.phase)])
 	var human_count := 0
 	var ready_count := 0
 	for member in room.members:

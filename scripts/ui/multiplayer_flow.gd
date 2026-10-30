@@ -74,6 +74,8 @@ var start_game_state_logged := false
 
 const CONNECTION_RETRY_INTERVAL := 4.0
 const MAX_CONNECTION_ATTEMPTS := 16
+const START_GAME_TIMEOUT_SECONDS := 8.0
+const LEAVE_ROOM_TIMEOUT_SECONDS := 5.0
 
 var name_input: LineEdit
 var server_input: LineEdit
@@ -1207,6 +1209,7 @@ func _send_request(message_type: String, payload: Dictionary) -> void:
 	request_type_in_flight = message_type
 	connection_attempts = 0
 	status_text = _request_status_text(message_type, not endpoint.connected)
+	request_timeout_timer.wait_time = START_GAME_TIMEOUT_SECONDS if message_type == Protocol.START_GAME and endpoint.connected else 90.0
 	request_timeout_timer.start()
 	pending_request = {"type": message_type, "payload": payload.duplicate(true)}
 	_refresh_current_page()
@@ -1258,6 +1261,7 @@ func _request_has_response(message_type: String, request_type: String) -> bool:
 		Protocol.CREATE_ROOM: return message_type == Protocol.ROOM_CREATED
 		Protocol.JOIN_ROOM, Protocol.SET_READY, Protocol.REQUEST_SEAT_SWAP, Protocol.RESPOND_SEAT_SWAP, Protocol.REMATCH:
 			return message_type in [Protocol.LOBBY_STATE, Protocol.SEAT_SWAP_RESULT]
+		Protocol.LEAVE_ROOM: return message_type == Protocol.ROOM_LEFT
 		Protocol.START_GAME, Protocol.START_NEXT_ROUND, Protocol.CONTINUE_RPS:
 			return message_type in [Protocol.START_GAME, Protocol.DEAL, Protocol.RPS_STATE]
 		Protocol.PLAY_CARDS, Protocol.PASS:
@@ -1279,7 +1283,16 @@ func _finish_request(message: String = "") -> void:
 	_refresh_current_page()
 
 func _on_request_timeout() -> void:
-	if request_in_flight:
+	if not request_in_flight:
+		return
+	if request_type_in_flight == Protocol.LEAVE_ROOM:
+		print("[MP] Leave Room acknowledgement timed out.")
+		_return_to_main_menu("Room leave timed out. Connection closed.")
+		endpoint.disconnect_from_server()
+	elif request_type_in_flight == Protocol.START_GAME:
+		print("[MP] Start Game timed out.")
+		_finish_request("Start Game timed out. Please try again.")
+	else:
 		_finish_request("No response from the room server. Check your connection and retry.")
 
 func _on_connection_status(connected: bool, reason: String) -> void:
@@ -1292,6 +1305,7 @@ func _on_connection_status(connected: bool, reason: String) -> void:
 			else:
 				if request_type == Protocol.START_GAME:
 					print("[MP] Start Game request sent after connecting.")
+					request_timeout_timer.start(START_GAME_TIMEOUT_SECONDS)
 				pending_request.clear()
 				status_text = _request_status_text(request_type, false)
 				_refresh_current_page()
@@ -1300,10 +1314,17 @@ func _on_connection_status(connected: bool, reason: String) -> void:
 		if request_in_flight and not pending_request.is_empty():
 			_schedule_connection_retry(reason)
 		elif request_in_flight:
-			_finish_request(reason if not reason.is_empty() else "Disconnected from the room server.")
+			var disconnect_message := reason if not reason.is_empty() else "Disconnected from the room server."
+			if page == "lobby":
+				_return_to_main_menu(disconnect_message)
+			else:
+				_finish_request(disconnect_message)
 		else:
-			status_text = reason
-			_refresh_current_page()
+			if page == "lobby":
+				_return_to_main_menu(reason if not reason.is_empty() else "Disconnected from the room server.")
+			else:
+				status_text = reason
+				_refresh_current_page()
 
 func _on_server_message(message: Dictionary) -> void:
 	var message_type := str(message.get("type", ""))
@@ -1324,6 +1345,12 @@ func _on_server_message(message: Dictionary) -> void:
 	if not request_in_flight and message_type != Protocol.ACTION_REJECTED:
 		status_text = ""
 	match message_type:
+		Protocol.ROOM_LEFT:
+			print("[MP] Server confirmed room leave.")
+			_return_to_main_menu(str(payload.get("reason", "")))
+		Protocol.ROOM_CLOSED:
+			print("[MP] Server closed the room.")
+			_return_to_main_menu(str(payload.get("reason", "The room was closed.")))
 		Protocol.ROOM_CREATED:
 			room_code = str(payload.get("room_code", ""))
 			room_max_players = int(payload.get("max_players", room_max_players))
@@ -1470,9 +1497,25 @@ func _toggle_card(card_id: String) -> void:
 	_show_online_game()
 
 func _leave_room() -> void:
-	if endpoint.connected:
-		endpoint.send_intent(Protocol.LEAVE_ROOM, {})
-		endpoint.disconnect_from_server()
+	if not endpoint.connected:
+		_return_to_main_menu("Disconnected from the room server.")
+		return
+	request_in_flight = true
+	request_type_in_flight = Protocol.LEAVE_ROOM
+	pending_request.clear()
+	status_text = "Leaving room…"
+	request_timeout_timer.start(LEAVE_ROOM_TIMEOUT_SECONDS)
+	_refresh_current_page()
+	if endpoint.send_intent(Protocol.LEAVE_ROOM, {}):
+		print("[MP] Leave Room request sent.")
+	else:
+		_return_to_main_menu("Could not leave the room cleanly. Please retry.")
+
+func _return_to_main_menu(message: String = "") -> void:
+	request_timeout_timer.stop()
+	request_in_flight = false
+	request_type_in_flight = ""
+	pending_request.clear()
 	room_code = ""
 	incoming_seat_swap.clear()
 	outgoing_seat_swaps.clear()
@@ -1480,9 +1523,9 @@ func _leave_room() -> void:
 	online_center_initialized = false
 	room_players.clear()
 	online_hand.clear()
-	pending_request.clear()
 	is_host = false
-	status_text = ""
+	local_player_index = -1
+	status_text = message
 	_show_main_menu()
 
 func _role_for(player_index: int) -> String:
