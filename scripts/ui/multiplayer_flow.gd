@@ -59,8 +59,13 @@ var exchange_participant := false
 var pending_request: Dictionary = {}
 var request_in_flight := false
 var request_type_in_flight := ""
+var connection_attempts := 0
 var request_timeout_timer: Timer
+var connection_retry_timer: Timer
 var status_text := ""
+
+const CONNECTION_RETRY_INTERVAL := 4.0
+const MAX_CONNECTION_ATTEMPTS := 16
 
 var name_input: LineEdit
 var server_input: LineEdit
@@ -79,9 +84,15 @@ func _ready() -> void:
 	request_timeout_timer = Timer.new()
 	request_timeout_timer.name = "RequestTimeout"
 	request_timeout_timer.one_shot = true
-	request_timeout_timer.wait_time = 15.0
+	request_timeout_timer.wait_time = 90.0
 	request_timeout_timer.timeout.connect(_on_request_timeout)
-	add_child(request_timeout_timer)
+	endpoint.add_child(request_timeout_timer)
+	connection_retry_timer = Timer.new()
+	connection_retry_timer.name = "ConnectionRetry"
+	connection_retry_timer.one_shot = true
+	connection_retry_timer.wait_time = CONNECTION_RETRY_INTERVAL
+	connection_retry_timer.timeout.connect(_retry_pending_connection)
+	endpoint.add_child(connection_retry_timer)
 	var profile := ConfigFile.new()
 	if profile.load(PROFILE_PATH) == OK:
 		guest_name = str(profile.get_value("profile", "display_name", "Guest"))
@@ -1075,6 +1086,7 @@ func _send_request(message_type: String, payload: Dictionary) -> void:
 		return
 	request_in_flight = true
 	request_type_in_flight = message_type
+	connection_attempts = 0
 	status_text = _request_status_text(message_type, not endpoint.connected)
 	request_timeout_timer.start()
 	pending_request = {"type": message_type, "payload": payload.duplicate(true)}
@@ -1083,11 +1095,30 @@ func _send_request(message_type: String, payload: Dictionary) -> void:
 		if endpoint.send_intent(message_type, payload):
 			pending_request.clear()
 		else:
-			_finish_request("Could not send the request. Check your connection and try again.")
+			_schedule_connection_retry("Could not send the request.")
 		return
-	var error: Error = endpoint.connect_to_server(server_url.strip_edges())
-	if error != OK:
-		_finish_request("Could not connect to the room server. Check your connection and try again.")
+	_start_connection_attempt()
+
+func _start_connection_attempt() -> void:
+	if not request_in_flight or pending_request.is_empty():
+		return
+	connection_attempts += 1
+	status_text = "Connecting to room server…" if connection_attempts == 1 else "Room server is waking. Retrying…"
+	_refresh_current_page()
+	endpoint.connect_to_server(server_url.strip_edges())
+
+func _schedule_connection_retry(_reason: String) -> void:
+	if not request_in_flight or pending_request.is_empty():
+		return
+	if connection_attempts >= MAX_CONNECTION_ATTEMPTS:
+		_finish_request("Could not connect to the room server. Please try again shortly.")
+		return
+	status_text = "Could not connect yet. Retrying (%d/%d)…" % [connection_attempts, MAX_CONNECTION_ATTEMPTS]
+	connection_retry_timer.start(CONNECTION_RETRY_INTERVAL)
+	_refresh_current_page()
+
+func _retry_pending_connection() -> void:
+	_start_connection_attempt()
 
 func _request_status_text(message_type: String, connecting: bool) -> String:
 	if connecting:
@@ -1117,8 +1148,11 @@ func _request_has_response(message_type: String, request_type: String) -> bool:
 func _finish_request(message: String = "") -> void:
 	if request_timeout_timer != null:
 		request_timeout_timer.stop()
+	if connection_retry_timer != null:
+		connection_retry_timer.stop()
 	request_in_flight = false
 	request_type_in_flight = ""
+	connection_attempts = 0
 	pending_request.clear()
 	status_text = message
 	_refresh_current_page()
@@ -1129,15 +1163,19 @@ func _on_request_timeout() -> void:
 
 func _on_connection_status(connected: bool, reason: String) -> void:
 	if connected:
+		connection_retry_timer.stop()
 		if not pending_request.is_empty():
 			var request_type := str(pending_request.type)
 			if not endpoint.send_intent(request_type, pending_request.payload):
-				_finish_request("Could not send the request. Check your connection and try again.")
+				_schedule_connection_retry("Could not send the request.")
 			else:
+				pending_request.clear()
 				status_text = _request_status_text(request_type, false)
 				_refresh_current_page()
 	else:
-		if request_in_flight:
+		if request_in_flight and not pending_request.is_empty():
+			_schedule_connection_retry(reason)
+		elif request_in_flight:
 			_finish_request(reason if not reason.is_empty() else "Disconnected from the room server.")
 		else:
 			status_text = reason
