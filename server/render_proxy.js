@@ -14,6 +14,7 @@ const activeSockets = new Set();
 let shuttingDown = false;
 let godotBackendReady = false;
 let godotStartupOutput = "";
+let websocketUpgradeSequence = 0;
 
 function parsePort(value, fallback, label) {
 	if (!value) return fallback;
@@ -79,6 +80,16 @@ server.on("upgrade", (request, clientSocket, head) => {
 		return;
 	}
 
+	const upgradeId = ++websocketUpgradeSequence;
+	const missingHeaders = getInvalidWebSocketUpgradeHeaders(request);
+	if (missingHeaders.length > 0) {
+		console.warn(
+			`[Proxy] Rejected malformed public WebSocket upgrade: id=${upgradeId} header_count=${request.rawHeaders.length / 2} missing=${missingHeaders.join(",")}.`,
+		);
+		clientSocket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+		return;
+	}
+
 	activeSockets.add(clientSocket);
 	clientSocket.once("close", () => activeSockets.delete(clientSocket));
 	const godotSocket = net.createConnection({ host: GODOT_HOST, port: GODOT_PORT });
@@ -109,6 +120,23 @@ server.on("upgrade", (request, clientSocket, head) => {
 	});
 	clientSocket.once("error", () => godotSocket.destroy());
 });
+
+function getInvalidWebSocketUpgradeHeaders(request) {
+	const missing = [];
+	if (request.method !== "GET") missing.push("GET");
+	if (!request.headers.host) missing.push("Host");
+	if (String(request.headers.upgrade || "").toLowerCase() !== "websocket") missing.push("Upgrade");
+	const connectionTokens = String(request.headers.connection || "")
+		.split(",")
+		.map((token) => token.trim().toLowerCase());
+	if (!connectionTokens.includes("upgrade")) missing.push("Connection:Upgrade");
+	if (request.headers["sec-websocket-version"] !== "13") missing.push("Sec-WebSocket-Version:13");
+	const websocketKey = request.headers["sec-websocket-key"];
+	if (typeof websocketKey !== "string" || Buffer.from(websocketKey, "base64").length !== 16) {
+		missing.push("Sec-WebSocket-Key");
+	}
+	return missing;
+}
 
 server.on("error", (error) => {
 	console.error("Public HTTP/WebSocket proxy failed:", error.message);

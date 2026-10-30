@@ -56,7 +56,7 @@ func first_player_by_three_clubs() -> int:
 func three_clubs_holders() -> Array[int]:
 	var result: Array[int] = []
 	for player_index in range(players.size()):
-		for card: CardData in players[player_index].hand:
+		for card: CardDataScript in players[player_index].hand:
 			if card.rank == "3" and card.suit == "Clubs":
 				result.append(player_index)
 				break

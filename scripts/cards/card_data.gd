@@ -26,5 +26,17 @@ func card_id() -> String:
 func to_dict() -> Dictionary:
 	return {"rank": rank, "suit": suit, "deck_index": deck_index, "id": card_id()}
 
-static func from_dict(data: Dictionary) -> CardData:
-	return CardData.new(str(data.get("rank", "3")), str(data.get("suit", "Clubs")), int(data.get("deck_index", 0)))
+static var _card_data_script: Script
+
+static func from_dict(data: Dictionary):
+	# A runtime load avoids both a self-preload cycle and a CardData class-cache dependency.
+	if _card_data_script == null:
+		_card_data_script = ResourceLoader.load("res://scripts/cards/card_data.gd") as Script
+	if _card_data_script == null or not _card_data_script.can_instantiate():
+		push_error("CardData script could not be loaded for dictionary construction.")
+		return null
+	return _card_data_script.new(
+		str(data.get("rank", "3")),
+		str(data.get("suit", "Clubs")),
+		int(data.get("deck_index", 0))
+	)

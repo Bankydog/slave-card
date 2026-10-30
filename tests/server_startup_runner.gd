@@ -6,6 +6,12 @@ const Protocol = preload("res://scripts/network/network_protocol.gd")
 const RoleSystemScript = preload("res://scripts/game/role_system.gd")
 
 func _ready() -> void:
+	var direct_game_state_ready := _test_direct_game_state_load()
+	if direct_game_state_ready:
+		print("SERVER GAMESTATE LOAD PASS: direct load, instantiability, and instance creation succeeded.")
+	else:
+		push_error("SERVER GAMESTATE LOAD FAIL: direct GameState load or instantiation failed.")
+
 	var room_service = RoomServiceScript.new()
 	var endpoint = ServerNetworkEndpointScript.new()
 	add_child(endpoint)
@@ -32,7 +38,16 @@ func _ready() -> void:
 
 	endpoint.shutdown()
 	endpoint.queue_free()
-	get_tree().quit(0 if listener_ready and round_flow_ready else 1)
+	get_tree().quit(0 if direct_game_state_ready and listener_ready and round_flow_ready else 1)
+
+func _test_direct_game_state_load() -> bool:
+	var game_state_script: Variant = load("res://scripts/game/game_state.gd")
+	if game_state_script == null or not game_state_script is Script:
+		return false
+	if not game_state_script.can_instantiate():
+		return false
+	var instance: Variant = game_state_script.new()
+	return instance != null
 
 func _test_room_service_round_flow(room_service) -> bool:
 	var emitted_types: Array[String] = []
