@@ -18,6 +18,16 @@ var failures: Array[String] = []
 var messages_by_peer: Dictionary = {}
 
 func _ready() -> void:
+	if OS.get_cmdline_user_args().has("--start-game-only"):
+		_test_start_game_initializes_first_round()
+		if failures.is_empty():
+			print("TARGETED START GAME PASS")
+			get_tree().quit(0)
+		else:
+			for failure in failures:
+				push_error(failure)
+			get_tree().quit(1)
+		return
 	_test_decks_and_deals()
 	_test_roles()
 	_test_exchange()
@@ -39,6 +49,7 @@ func _ready() -> void:
 	_test_lobby_visual_styles()
 	_test_bot_combinations()
 	_test_server_ready_authority()
+	_test_start_game_initializes_first_round()
 	_test_server_seat_swaps()
 	_test_server_lobby_presence()
 	_test_server_disconnect_forfeit()
@@ -347,6 +358,25 @@ func _test_server_ready_authority() -> void:
 	var host_lobby := _last_message(910, Protocol.LOBBY_STATE)
 	var guest_lobby := _last_message(911, Protocol.LOBBY_STATE)
 	_check(host_lobby.payload.all_ready and guest_lobby.payload.all_ready and host_lobby.payload.ready_count == guest_lobby.payload.ready_count, "readiness summary is broadcast identically to clients")
+
+func _test_start_game_initializes_first_round() -> void:
+	var service = RoomServiceScript.new()
+	service.send_to_peer.connect(_capture_message)
+	service.handle_message(905, {"type":Protocol.CREATE_ROOM, "payload":{"name":"Host", "max_players":2, "match_round_limit":4}})
+	var code := str(_last_message(905, Protocol.ROOM_CREATED).get("payload", {}).get("room_code", ""))
+	service.handle_message(906, {"type":Protocol.JOIN_ROOM, "payload":{"name":"Guest", "room_code":code}})
+	_ready_peers(service, [905, 906])
+	service.handle_message(905, {"type":Protocol.START_GAME, "payload":{"fill_bots":false}})
+	var room: Dictionary = service.rooms[code]
+	_check(room.phase == "playing" and room.match_state.current_round == 1, "two-human Start Game initializes the first round")
+	_check(room.game_state != null and room.game_state.players.size() == 2 and room.game_state.players[0].hand.size() > 0, "first round creates and deals a GameState")
+	_check(_last_message(905, Protocol.START_GAME).size() > 0 and _last_message(906, Protocol.START_GAME).size() > 0 and _last_message(905, Protocol.DEAL).size() > 0 and _last_message(906, Protocol.DEAL).size() > 0 and _last_message(905, Protocol.TURN_CHANGED).size() > 0 and _last_message(906, Protocol.TURN_CHANGED).size() > 0, "first-round start, deal, and turn snapshots reach both peers")
+	room.game_state.finishing_order.clear()
+	room.game_state.finishing_order.append(0)
+	room.game_state.finishing_order.append(1)
+	service._finish_round(room)
+	service.handle_message(905, {"type":Protocol.START_NEXT_ROUND, "payload":{}})
+	_check(room.phase in ["card_exchange", "playing"] and room.match_state.current_round == 2 and room.game_state != null and room.game_state.players.size() == 2, "next-round path reuses the GameState constructor successfully")
 
 func _last_message(peer_id: int, message_type: String) -> Dictionary:
 	var result := {}

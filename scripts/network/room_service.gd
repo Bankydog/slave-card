@@ -3,7 +3,6 @@ extends RefCounted
 
 signal send_to_peer(peer_id: int, message: Dictionary)
 
-const GameStateScript = preload("res://scripts/game/game_state.gd")
 const BotBrainScript = preload("res://scripts/ai/bot_brain.gd")
 const RoleSystemScript = preload("res://scripts/game/role_system.gd")
 const CardExchangeScript = preload("res://scripts/game/card_exchange.gd")
@@ -424,7 +423,7 @@ func _start_round(room: Dictionary) -> void:
 	if not room.match_state.advance_round():
 		return
 	room.round_number = int(room.match_state.current_round)
-	room.game_state = GameStateScript.new()
+	room.game_state = GameState.new()
 	room.game_state.start(room.members.size(), 0, round_starter)
 	for i in range(room.members.size()):
 		var member: Dictionary = room.members[i]
