@@ -642,6 +642,12 @@ func _show_online_game() -> void:
 		serialized_cards = [online_snapshot.current_card]
 	for card_data in serialized_cards:
 		current_cards.append(CardDataScript.from_dict(card_data))
+	var played_pile: Array[CardData] = []
+	var serialized_pile: Array = online_snapshot.get("pile_cards", serialized_cards)
+	for card_data in serialized_pile:
+		played_pile.append(CardDataScript.from_dict(card_data))
+	if played_pile.is_empty() and not current_cards.is_empty():
+		played_pile = current_cards.duplicate()
 	var combination: Dictionary = online_snapshot.get("combination", {})
 	var center_text := "Lead a combination"
 	if not current_cards.is_empty():
@@ -653,11 +659,16 @@ func _show_online_game() -> void:
 	for player in online_players:
 		passed.append(bool(player.get("passed", false)))
 	var next_center_ids: Array[String] = []
-	for card: CardData in current_cards:
+	for card: CardData in played_pile:
 		next_center_ids.append(card.card_id())
 	var animation_player := -1
-	if next_center_ids != online_center_card_ids:
-		if not next_center_ids.is_empty():
+	var previous_center_ids := online_center_card_ids.duplicate()
+	var newly_played_cards: Array[CardData] = []
+	if next_center_ids != previous_center_ids:
+		for card: CardData in played_pile:
+			if not previous_center_ids.has(card.card_id()):
+				newly_played_cards.append(card)
+		if not newly_played_cards.is_empty():
 			animation_player = int(online_snapshot.get("last_player", -1))
 			if online_center_initialized:
 				SfxManager.play_card_play()
@@ -666,7 +677,7 @@ func _show_online_game() -> void:
 	table_view.name = "TablePresentation"
 	table_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(table_view)
-	table_view.configure(online_players, online_player_index, int(online_snapshot.get("current_player", -1)), passed, current_cards, center_text, _is_compact_view(), animation_player)
+	table_view.configure(online_players, online_player_index, int(online_snapshot.get("current_player", -1)), passed, played_pile, center_text, _is_compact_view(), animation_player, newly_played_cards)
 
 	var center_message := ""
 	if trading:
@@ -770,10 +781,11 @@ func _show_online_game() -> void:
 	if trading:
 		var return_button := Button.new()
 		return_button.name = "ConfirmTradeButton"
-		return_button.text = "Confirm Trade (%d/%d)" % [selected_card_ids.size(), return_card_count]
-		return_button.custom_minimum_size = Vector2(220, 48) * scale
+		return_button.text = "CONFIRM TRADE\n%d / %d" % [selected_card_ids.size(), return_card_count]
+		return_button.custom_minimum_size = Vector2(248, 96) * scale
 		return_button.disabled = return_card_count <= 0 or selected_card_ids.size() != return_card_count
 		return_button.pressed.connect(_submit_exchange)
+		_style_exchange_confirm_button(return_button, scale)
 		buttons.add_child(return_button)
 	else:
 		var play_button := _image_action_button("PlayButton", "res://assets/gadget/bottom-play.png", "Play", _submit_play)
@@ -785,6 +797,28 @@ func _show_online_game() -> void:
 		buttons.add_child(leave_button)
 	_status(root)
 	_enforce_text_minimum(root)
+
+func _style_exchange_confirm_button(button: Button, scale: float) -> void:
+	for state in ["normal", "hover", "pressed", "disabled"]:
+		var style := StyleBoxFlat.new()
+		style.bg_color = Color("#d8ad43")
+		if state == "hover":
+			style.bg_color = Color("#f0c957")
+		elif state == "pressed":
+			style.bg_color = Color("#b98924")
+		elif state == "disabled":
+			style.bg_color = Color("#756b4f")
+		style.border_color = Color("#fff0a3")
+		style.set_border_width_all(3)
+		style.set_corner_radius_all(10)
+		style.content_margin_left = 10.0 * scale
+		style.content_margin_right = 10.0 * scale
+		button.add_theme_stylebox_override(state, style)
+	button.add_theme_color_override("font_color", Color("#17271e"))
+	button.add_theme_color_override("font_hover_color", Color("#17271e"))
+	button.add_theme_color_override("font_pressed_color", Color("#17271e"))
+	button.add_theme_color_override("font_disabled_color", Color("#ece7d9"))
+	button.add_theme_font_size_override("font_size", maxi(18, roundi(21.0 * scale)))
 
 func _trade_summary_parts() -> Array[String]:
 	var parts: Array[String] = []

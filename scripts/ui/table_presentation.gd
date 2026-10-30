@@ -62,7 +62,7 @@ func _build_seat_layer() -> void:
 	seat_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(seat_layer)
 
-func configure(players: Array, local_index: int, current_player: int, passed: Array, cards: Array, center_text: String, compact: bool, played_by: int = -1) -> void:
+func configure(players: Array, local_index: int, current_player: int, passed: Array, cards: Array, center_text: String, compact: bool, played_by: int = -1, animation_cards: Array = []) -> void:
 	compact_view = compact
 	local_seat_index = clampi(local_index, 0, maxi(0, players.size() - 1))
 	var layout: Dictionary = TableLayoutScript.layout_for_viewport(get_viewport_rect().size)
@@ -78,7 +78,7 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 		detail_labels[i].text = "%d cards" % card_count
 		role_icons[i].texture = role_texture(role)
 		role_icons[i].visible = role_icons[i].texture != null
-		role_icons[i].custom_minimum_size = Vector2(24, 20) * layout_scale
+		role_icons[i].custom_minimum_size = Vector2(maxf((40.0 if not compact_view else 32.0) * layout_scale, 30.0), maxf((34.0 if not compact_view else 27.0) * layout_scale, 25.0))
 		var status := "WAITING"
 		if bool(player.get("disconnected", false)) or bool(player.get("forfeited", false)):
 			status = "LEFT"
@@ -98,7 +98,13 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 	for card: CardData in cards:
 		next_ids.append(card.card_id())
 	var had_center_snapshot := has_center_snapshot
+	var previous_card_ids := center_card_ids.duplicate()
 	var cards_changed := not has_center_snapshot or next_ids != center_card_ids
+	var newly_played_cards: Array = animation_cards.duplicate()
+	if newly_played_cards.is_empty() and had_center_snapshot:
+		for card: CardData in cards:
+			if not previous_card_ids.has(card.card_id()):
+				newly_played_cards.append(card)
 	if cards_changed:
 		play_animation_id += 1
 		if is_instance_valid(play_animation_tween):
@@ -118,8 +124,8 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 			if played_by >= 0 and played_by < players.size():
 				if had_center_snapshot:
 					SfxManager.play_card_play()
-				if seats_can_animate():
-					_start_card_flight(cards, played_by)
+				if seats_can_animate() and not newly_played_cards.is_empty():
+					_start_card_flight(newly_played_cards, played_by)
 	center_title.add_theme_font_size_override("font_size", maxi(16, roundi(16.0 * layout_scale)))
 	call_deferred("_layout_seats")
 
@@ -158,7 +164,8 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 		flight_card.position = source - Vector2(card_width, card_height) * 0.5
 		flight_card.scale = Vector2(0.58, 0.58)
 		play_flight_layer.add_child(flight_card)
-		var target_card := pile_cards.get_child(i) as Control
+		var target_index := pile_cards.get_child_count() - cards.size() + i
+		var target_card := pile_cards.get_child(target_index) as Control
 		var destination := play_flight_layer.get_global_transform().affine_inverse() * target_card.global_position
 		var delay := float(i) * stagger
 		play_animation_tween.tween_property(flight_card, "position", destination, flight_duration).set_delay(delay).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
@@ -232,6 +239,14 @@ func _ensure_seats(count: int) -> void:
 		player_name.add_theme_color_override("font_color", Color("#fff8e8"))
 		player_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		name_row.add_child(player_name)
+		var role_icon := TextureRect.new()
+		role_icon.name = "RoleIcon"
+		role_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		role_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		role_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		role_icon.size_flags_horizontal = Control.SIZE_SHRINK_END
+		role_icon.hide()
+		name_row.add_child(role_icon)
 		var details_row := HBoxContainer.new()
 		details_row.add_theme_constant_override("separation", 4)
 		content.add_child(details_row)
@@ -241,13 +256,6 @@ func _ensure_seats(count: int) -> void:
 		details.add_theme_color_override("font_color", Color("#cbd9cb"))
 		details.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		details_row.add_child(details)
-		var role_icon := TextureRect.new()
-		role_icon.name = "RoleIcon"
-		role_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		role_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		role_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		role_icon.hide()
-		details_row.add_child(role_icon)
 		var status := Label.new()
 		status.clip_text = true
 		status.add_theme_color_override("font_color", Color("#f3d78b"))
@@ -338,10 +346,10 @@ func _layout_seats() -> void:
 
 static func seat_panel_size(player_count: int, scale: float = 1.0) -> Vector2:
 	if player_count <= 4:
-		return Vector2(maxf(152.0 * scale, 112.0), maxf(78.0 * scale, 68.0))
+		return Vector2(maxf(152.0 * scale, 112.0), maxf(88.0 * scale, 76.0))
 	if player_count <= 8:
-		return Vector2(maxf(136.0 * scale, 96.0), maxf(72.0 * scale, 62.0))
-	return Vector2(maxf(118.0 * scale, 82.0), maxf(68.0 * scale, 58.0))
+		return Vector2(maxf(136.0 * scale, 96.0), maxf(84.0 * scale, 76.0))
+	return Vector2(maxf(118.0 * scale, 82.0), maxf(80.0 * scale, 72.0))
 
 static func normalized_seat_positions(player_count: int, compact: bool = false, local_index: int = 0) -> Array[Vector2]:
 	var count := clampi(player_count, 0, 12)

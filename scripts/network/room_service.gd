@@ -747,6 +747,7 @@ func _public_turn(room: Dictionary) -> Dictionary:
 		"current_player": game.current_player,
 		"current_card": game.current_card.to_dict() if game.current_card != null else {},
 		"current_cards": _serialize_hand(game.current_cards),
+		"pile_cards": _serialize_hand(game.trick_pile_cards),
 		"combination": game.current_combination.duplicate(true),
 		"last_player": game.last_player,
 		"last_player_name": str(room.members[game.last_player].name) if game.last_player >= 0 else "",

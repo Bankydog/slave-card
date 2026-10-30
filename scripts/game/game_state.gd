@@ -12,6 +12,7 @@ const CardDataScript = preload("res://scripts/cards/card_data.gd")
 var players: Array[Dictionary] = []
 var current_player := 0
 var current_cards: Array = []
+var trick_pile_cards: Array = []
 var current_combination: Dictionary = {}
 # Kept for compatibility with single-card displays and older callers.
 var current_card
@@ -39,6 +40,7 @@ func start(player_count: int, seed_value: int = 0, starting_player: int = -1) ->
 	passed.resize(player_count)
 	passed.fill(false)
 	current_cards.clear()
+	trick_pile_cards.clear()
 	current_combination.clear()
 	current_card = null
 	last_player = -1
@@ -101,6 +103,7 @@ func play_cards(player_index: int, requested_cards: Array) -> bool:
 	players[player_index].hand = hand
 	HandSorterScript.sort_hand(players[player_index].hand)
 	current_cards = chosen.duplicate()
+	trick_pile_cards.append_array(chosen)
 	current_combination = rules.classify(current_cards)
 	current_card = current_cards[0] if current_cards.size() == 1 else null
 	last_player = player_index
@@ -182,6 +185,7 @@ func _next_unpassed_player(after_index: int) -> int:
 func reset_trick() -> void:
 	var previous_leader := last_player
 	current_cards.clear()
+	trick_pile_cards.clear()
 	current_combination.clear()
 	current_card = null
 	passed.fill(false)

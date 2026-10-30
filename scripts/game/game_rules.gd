@@ -5,7 +5,8 @@ const CardDataScript = preload("res://scripts/cards/card_data.gd")
 
 const RANKS := ["3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "2"]
 const SUIT_ORDER := ["Clubs", "Diamonds", "Hearts", "Spades"]
-const STRAIGHT_LENGTH := 5
+const MIN_STRAIGHT_LENGTH := 3
+const MAX_STRAIGHT_LENGTH := 5
 const TYPE_SINGLE := "Single"
 const TYPE_PAIR := "Pair"
 const TYPE_TRIPLE := "Triple"
@@ -43,8 +44,8 @@ func classify(cards: Array) -> Dictionary:
 	if card_count in [2, 3, 4] and rank_counts.size() == 1:
 		var group_type := TYPE_PAIR if card_count == 2 else TYPE_TRIPLE if card_count == 3 else TYPE_FOUR_OF_A_KIND
 		return _valid(group_type, card_count, rank_values[0])
-	if card_count != STRAIGHT_LENGTH:
-		return _invalid("A straight must contain exactly five cards.")
+	if card_count < MIN_STRAIGHT_LENGTH or card_count > MAX_STRAIGHT_LENGTH:
+		return _invalid("A straight must contain three to five cards.")
 	if rank_values.size() != card_count:
 		return _invalid("A straight cannot repeat a rank.")
 	if not straight_allow_two and rank_values.has(RANKS.size() - 1):
@@ -158,8 +159,7 @@ func list_legal_combinations(hand: Array, current_cards: Array = []) -> Array:
 			if group.size() >= group_size:
 				_choose_group(group, group_size, 0, [], current_cards, results)
 
-	var length := STRAIGHT_LENGTH
-	if hand.size() >= length:
+	for length in range(MIN_STRAIGHT_LENGTH, mini(MAX_STRAIGHT_LENGTH, hand.size()) + 1):
 		for start_rank in range(0, RANKS.size() - length + 1):
 			var window: Array[int] = []
 			var window_available := true

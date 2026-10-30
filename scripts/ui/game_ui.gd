@@ -592,7 +592,10 @@ func _layout_game_hud() -> void:
 	buttons_box.add_theme_constant_override("separation", roundi(8.0 * scale))
 	for button in buttons_box.get_children():
 		if button is BaseButton:
-			button.custom_minimum_size = Vector2(118.0, 118.0) * scale
+			if button.name == "ExchangeButton":
+				button.custom_minimum_size = Vector2(220.0, 84.0) * scale
+			else:
+				button.custom_minimum_size = Vector2(118.0, 118.0) * scale
 
 func _refresh() -> void:
 	if state == null or not is_instance_valid(hand_box):
@@ -618,7 +621,7 @@ func _refresh() -> void:
 		if combination_name == "Triple":
 			combination_name = "Three of a Kind"
 		center_text = "%s · %s" % [combination_name, str(state.players[state.last_player].name)]
-	table_presentation.configure(state.players, 0, state.current_player, state.passed, state.current_cards, center_text, _is_compact_view(), state.last_player)
+	table_presentation.configure(state.players, 0, state.current_player, state.passed, state.trick_pile_cards, center_text, _is_compact_view(), state.last_player)
 	table_presentation.set_center_info("Cards: %d · Turn %d of %d" % [state.players[0].hand.size(), state.current_player + 1, state.players.size()])
 	for child in hand_box.get_children():
 		child.queue_free()
@@ -640,6 +643,28 @@ func _refresh() -> void:
 		bot_timer.stop()
 	else:
 		bot_timer.start(0.8)
+
+func _style_exchange_confirm_button(button: Button, scale: float) -> void:
+	for state in ["normal", "hover", "pressed", "disabled"]:
+		var style := StyleBoxFlat.new()
+		style.bg_color = Color("#d8ad43")
+		if state == "hover":
+			style.bg_color = Color("#f0c957")
+		elif state == "pressed":
+			style.bg_color = Color("#b98924")
+		elif state == "disabled":
+			style.bg_color = Color("#756b4f")
+		style.border_color = Color("#fff0a3")
+		style.set_border_width_all(3)
+		style.set_corner_radius_all(10)
+		style.content_margin_left = 10.0 * scale
+		style.content_margin_right = 10.0 * scale
+		button.add_theme_stylebox_override(state, style)
+	button.add_theme_color_override("font_color", Color("#17271e"))
+	button.add_theme_color_override("font_hover_color", Color("#17271e"))
+	button.add_theme_color_override("font_pressed_color", Color("#17271e"))
+	button.add_theme_color_override("font_disabled_color", Color("#ece7d9"))
+	button.add_theme_font_size_override("font_size", maxi(18, roundi(21.0 * scale)))
 
 func _refresh_local_exchange() -> void:
 	title_label.text = "Round %d / %d  ·  Card Exchange" % [match_progress.current_round, match_progress.match_round_limit]
@@ -671,7 +696,8 @@ func _refresh_local_exchange() -> void:
 	var exchange_button: Button = buttons_box.get_node("ExchangeButton")
 	exchange_button.show()
 	exchange_button.disabled = amount <= 0 or selected_exchange_ids.size() != amount
-	exchange_button.text = "Confirm Trade (%d/%d)" % [selected_exchange_ids.size(), amount]
+	exchange_button.text = "CONFIRM TRADE\n%d / %d" % [selected_exchange_ids.size(), amount]
+	_style_exchange_confirm_button(exchange_button, _display_scale())
 	_enforce_text_minimum(self)
 
 func _toggle_local_exchange_card(card: CardData) -> void:

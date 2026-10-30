@@ -124,9 +124,8 @@ static func make_pile(cards: Array, compact: bool = false, scale_factor: float =
 	var factor := maxf(0.35, scale_factor)
 	var card_width := (42.0 if compact else 58.0) * factor
 	var card_height := (64.0 if compact else 92.0) * factor
-	var step := (17.0 if compact else 22.0) * factor
-	var pile_width := card_width + maxi(0, cards.size() - 1) * step + 12.0 * factor
-	var pile_height := card_height + (8.0 if compact else 16.0) * factor
+	var pile_width := card_width + (86.0 if compact else 112.0) * factor
+	var pile_height := card_height + (62.0 if compact else 82.0) * factor
 	var frame := CenterContainer.new()
 	frame.name = "CenterCardPile"
 	frame.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -136,17 +135,18 @@ static func make_pile(cards: Array, compact: bool = false, scale_factor: float =
 	pile.custom_minimum_size = Vector2(pile_width, pile_height)
 	pile.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	frame.add_child(pile)
-	var rotations := [-4.0, 2.5, -1.2, 3.6, -2.8, 1.1, 4.1]
-	var vertical_offsets := [3.0, -4.0, 1.0, -2.0, 4.0, -3.0, 0.0]
+	var rotations := [-8.0, 5.5, -2.0, 9.0, -5.0, 2.0, 7.0, -10.0, 3.5, -4.0, 11.0, -6.5]
+	var x_offsets := [-30.0, 8.0, 24.0, -17.0, 35.0, -4.0, -36.0, 16.0, 29.0, -25.0, 2.0, 38.0]
+	var y_offsets := [-13.0, 10.0, -5.0, 20.0, -18.0, 4.0, 16.0, -22.0, 7.0, 23.0, -10.0, 1.0]
 	for i in range(cards.size()):
 		var view: CardView = CardView.new()
 		view.setup(cards[i], false, compact, factor)
 		view.size = Vector2(card_width, card_height)
 		view.pivot_offset = Vector2(card_width * 0.5, card_height * 0.5)
-		var center_x := (pile_width - card_width) * 0.5
-		var x := center_x + (float(i) - float(cards.size() - 1) * 0.5) * step
-		view.position = Vector2(x, (pile_height - card_height) * 0.5 + vertical_offsets[i % vertical_offsets.size()] * factor)
-		view.rotation_degrees = rotations[i % rotations.size()]
+		var pattern_index := i % rotations.size()
+		var center := Vector2((pile_width - card_width) * 0.5, (pile_height - card_height) * 0.5)
+		view.position = center + Vector2(x_offsets[pattern_index], y_offsets[pattern_index]) * factor
+		view.rotation_degrees = rotations[pattern_index]
 		view.z_index = i
 		pile.add_child(view)
 	return frame
