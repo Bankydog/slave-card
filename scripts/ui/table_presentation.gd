@@ -30,6 +30,7 @@ var play_flight_layer: Control
 var play_animation_tween: Tween
 var play_animation_id := 0
 var center_card_ids: Array[String] = []
+var animated_pile_targets: Array[Control] = []
 var has_center_snapshot := false
 
 func _ready() -> void:
@@ -112,6 +113,7 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 			play_animation_tween = null
 		for child in play_flight_layer.get_children():
 			child.queue_free()
+		animated_pile_targets.clear()
 		center_card_ids = next_ids
 		has_center_snapshot = true
 		if is_instance_valid(center_pile):
@@ -139,7 +141,12 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 	if cards.is_empty() or played_by < 0 or played_by >= seat_widgets.size() or not is_instance_valid(center_pile):
 		return
 	var animation_token := play_animation_id
-	center_pile.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	var pile_cards: Control = center_pile.get_child(0)
+	for i in range(cards.size()):
+		var target_index := pile_cards.get_child_count() - cards.size() + i
+		var target_card := pile_cards.get_child(target_index) as Control
+		target_card.modulate = Color(1.0, 1.0, 1.0, 0.0)
+		animated_pile_targets.append(target_card)
 	await get_tree().process_frame
 	if animation_token != play_animation_id or not is_inside_tree() or not is_instance_valid(center_pile):
 		return
@@ -148,7 +155,6 @@ func _start_card_flight(cards: Array, played_by: int) -> void:
 	var flight_scale := layout_scale * 1.6
 	var card_width := (42.0 if compact_view else 58.0) * flight_scale
 	var card_height := (64.0 if compact_view else 92.0) * flight_scale
-	var pile_cards: Control = center_pile.get_child(0)
 	var stagger := 0.035
 	var sound_duration := CARD_FLIP_SOUND.get_length()
 	var flight_duration := maxf(0.1, sound_duration - stagger * float(cards.size() - 1))
@@ -178,8 +184,10 @@ func _finish_card_flight(animation_token: int) -> void:
 		return
 	for child in play_flight_layer.get_children():
 		child.queue_free()
-	if is_instance_valid(center_pile):
-		center_pile.modulate = Color.WHITE
+	for target_card in animated_pile_targets:
+		if is_instance_valid(target_card):
+			target_card.modulate = Color.WHITE
+	animated_pile_targets.clear()
 	play_animation_tween = null
 
 func set_center_message(message: String) -> void:

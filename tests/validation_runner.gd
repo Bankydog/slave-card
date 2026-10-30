@@ -28,6 +28,16 @@ func _ready() -> void:
 				push_error(failure)
 			get_tree().quit(1)
 		return
+	if OS.get_cmdline_user_args().has("--play-animation-only"):
+		await _test_play_animation_pile()
+		if failures.is_empty():
+			print("TARGETED PLAY ANIMATION PASS")
+			get_tree().quit(0)
+		else:
+			for failure in failures:
+				push_error(failure)
+			get_tree().quit(1)
+		return
 	_test_decks_and_deals()
 	_test_roles()
 	_test_exchange()
@@ -46,6 +56,7 @@ func _ready() -> void:
 	_test_suit_selection_helpers()
 	_test_card_hover_visuals()
 	_test_table_presentation()
+	await _test_play_animation_pile()
 	_test_lobby_visual_styles()
 	_test_bot_combinations()
 	_test_server_ready_authority()
@@ -962,6 +973,50 @@ func _test_table_presentation() -> void:
 					overlapped = false
 		_check(cluster.get_child_count() == combination.cards.size() and overlapped, "%s renders as a rotated overlapping center cluster" % combination.name)
 		pile.free()
+
+func _test_play_animation_pile() -> void:
+	var animated_table: Control = TablePresentationScript.new()
+	add_child(animated_table)
+	var seats := [{"name":"Player A"}, {"name":"Player B"}]
+	var pile_cards: Array = [_card("9", "Spades"), _card("10", "Diamonds")]
+	animated_table.configure(seats, 0, 1, [], pile_cards, "Single", true)
+	await get_tree().process_frame
+	var play_groups: Array = [
+		[_card("J", "Hearts")],
+		[_card("4", "Clubs"), _card("4", "Hearts")],
+		[_card("5", "Clubs"), _card("5", "Hearts"), _card("5", "Spades")],
+		[_card("6", "Clubs"), _card("7", "Hearts"), _card("8", "Spades"), _card("9", "Diamonds"), _card("10", "Clubs")],
+		[_card("Q", "Clubs"), _card("Q", "Hearts"), _card("Q", "Spades"), _card("Q", "Diamonds")],
+		[_card("3", "Diamonds"), _card("4", "Diamonds"), _card("5", "Diamonds"), _card("6", "Diamonds"), _card("7", "Diamonds")],
+		[_card("7", "Spades"), _card("7", "Diamonds"), _card("8", "Clubs"), _card("8", "Diamonds"), _card("9", "Hearts"), _card("9", "Clubs")]
+	]
+	for play_group: Array in play_groups:
+		var next_pile := pile_cards.duplicate()
+		next_pile.append_array(play_group)
+		animated_table.configure(seats, 0, 1, [], next_pile, "Play", true, 1, play_group)
+		var pile_layer: Control = animated_table.center_pile.get_child(0)
+		var existing_pile_visible := true
+		for i in range(pile_cards.size()):
+			existing_pile_visible = existing_pile_visible and is_equal_approx((pile_layer.get_child(i) as Control).modulate.a, 1.0)
+		var incoming_cards_hidden := true
+		for i in range(play_group.size()):
+			var target := pile_layer.get_child(pile_cards.size() + i) as Control
+			incoming_cards_hidden = incoming_cards_hidden and is_zero_approx(target.modulate.a)
+		_check(existing_pile_visible and incoming_cards_hidden and is_equal_approx(animated_table.center_pile.modulate.a, 1.0), "existing pile stays visible underneath %d animated card(s)" % play_group.size())
+		while animated_table.play_animation_tween == null:
+			await get_tree().process_frame
+		_check(animated_table.play_flight_layer.get_child_count() == play_group.size(), "flight layer contains only the %d newly played card(s)" % play_group.size())
+		var flight_tween: Tween = animated_table.play_animation_tween
+		await flight_tween.finished
+		await get_tree().process_frame
+		var pile_committed := true
+		for child in animated_table.center_pile.get_child(0).get_children():
+			pile_committed = pile_committed and is_equal_approx((child as Control).modulate.a, 1.0)
+		_check(pile_committed and animated_table.play_flight_layer.get_child_count() == 0, "animated play commits into the persistent pile after flight")
+		pile_cards = next_pile
+	animated_table.configure(seats, 0, 1, [], [], "Lead a combination", true)
+	_check(animated_table.center_pile == null and animated_table.center_title.visible, "trick reset clears the persistent center pile")
+	animated_table.free()
 
 func _test_lobby_visual_styles() -> void:
 	var flow: Control = MultiplayerFlowScript.new()
