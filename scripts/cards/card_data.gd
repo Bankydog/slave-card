@@ -1,8 +1,6 @@
 class_name CardData
 extends RefCounted
 
-const CardDataScript = preload("res://scripts/cards/card_data.gd")
-
 const SUITS := ["Clubs", "Diamonds", "Hearts", "Spades"]
 const RANKS := ["3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "2"]
 const SUIT_SYMBOLS := {"Clubs": "♣", "Diamonds": "♦", "Hearts": "♥", "Spades": "♠"}
@@ -28,5 +26,5 @@ func card_id() -> String:
 func to_dict() -> Dictionary:
 	return {"rank": rank, "suit": suit, "deck_index": deck_index, "id": card_id()}
 
-static func from_dict(data: Dictionary):
-	return CardDataScript.new(str(data.get("rank", "3")), str(data.get("suit", "Clubs")), int(data.get("deck_index", 0)))
+static func from_dict(data: Dictionary) -> CardData:
+	return CardData.new(str(data.get("rank", "3")), str(data.get("suit", "Clubs")), int(data.get("deck_index", 0)))
