@@ -12,6 +12,8 @@ const GODOT_EXECUTABLE = process.env.GODOT_BIN || "/usr/local/bin/godot";
 const GODOT_PROJECT_PATH = process.env.GODOT_PROJECT_PATH || "/app";
 const activeSockets = new Set();
 let shuttingDown = false;
+let godotBackendReady = false;
+let backendProbeInFlight = false;
 
 function parsePort(value, fallback, label) {
 	if (!value) return fallback;
@@ -41,6 +43,7 @@ godot.on("error", (error) => {
 });
 
 godot.on("exit", (code, signal) => {
+	setBackendReady(false);
 	if (shuttingDown) return;
 	console.error(`Godot dedicated server exited unexpectedly (code ${code}, signal ${signal}).`);
 	shutdown(code === 0 ? 1 : code || 1);
@@ -48,8 +51,14 @@ godot.on("exit", (code, signal) => {
 
 const server = http.createServer((request, response) => {
 	if (request.method === "GET" && (request.url === "/" || request.url === "/health")) {
+		if (request.url === "/health") {
+			const ready = godotBackendReady && godot.exitCode === null && godot.signalCode === null;
+			response.writeHead(ready ? 200 : 503, { "content-type": "application/json; charset=utf-8", connection: "close" });
+			response.end(JSON.stringify({ proxy_alive: true, godot_backend_ready: ready }) + "\n");
+			return;
+		}
 		response.writeHead(200, { "content-type": "text/plain; charset=utf-8", connection: "close" });
-		response.end(request.url === "/health" ? "ok\n" : "Slave Card server\n");
+		response.end("Slave Card server\n");
 		return;
 	}
 	response.writeHead(404, { "content-type": "text/plain; charset=utf-8", connection: "close" });
@@ -79,6 +88,9 @@ server.on("upgrade", (request, clientSocket, head) => {
 		);
 		if (head.length > 0) godotSocket.write(head);
 		requestForwarded = true;
+		godotSocket.once("data", (data) => {
+			if (data.toString("ascii", 0, 32).startsWith("HTTP/1.1 101")) setBackendReady(true);
+		});
 		clientSocket.pipe(godotSocket);
 		godotSocket.pipe(clientSocket);
 	});
@@ -102,9 +114,51 @@ server.listen(PUBLIC_PORT, PUBLIC_HOST, () => {
 	console.log(`Slave Card HTTP/WebSocket proxy listening on ${PUBLIC_HOST}:${PUBLIC_PORT}; Godot is ${GODOT_HOST}:${GODOT_PORT}.`);
 });
 
+const backendProbeTimer = setInterval(probeGodotBackend, 1000);
+backendProbeTimer.unref();
+probeGodotBackend();
+
+function probeGodotBackend() {
+	if (backendProbeInFlight || shuttingDown || godot.exitCode !== null || godot.signalCode !== null) return;
+	backendProbeInFlight = true;
+	const socket = net.createConnection({ host: GODOT_HOST, port: GODOT_PORT });
+	const timeout = setTimeout(() => socket.destroy(), 750);
+	timeout.unref();
+	socket.once("connect", () => {
+		socket.write(
+			"GET / HTTP/1.1\r\n" +
+			`Host: ${GODOT_HOST}:${GODOT_PORT}\r\n` +
+			"Upgrade: websocket\r\n" +
+			"Connection: Upgrade\r\n" +
+			"Sec-WebSocket-Version: 13\r\n" +
+			"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+		);
+	});
+	socket.once("data", (data) => {
+		clearTimeout(timeout);
+		setBackendReady(data.toString("ascii", 0, 32).startsWith("HTTP/1.1 101"));
+		socket.destroy();
+	});
+	socket.once("error", () => {
+		clearTimeout(timeout);
+		setBackendReady(false);
+	});
+	socket.once("close", () => {
+		clearTimeout(timeout);
+		backendProbeInFlight = false;
+	});
+}
+
+function setBackendReady(ready) {
+	if (godotBackendReady === ready) return;
+	godotBackendReady = ready;
+	console.log(`[Proxy] Godot WebSocket backend ${ready ? "ready" : "unavailable"} at ${GODOT_HOST}:${GODOT_PORT}.`);
+}
+
 function shutdown(exitCode) {
 	if (shuttingDown) return;
 	shuttingDown = true;
+	clearInterval(backendProbeTimer);
 	if (server.listening) server.close();
 	for (const socket of activeSockets) socket.destroy();
 	if (godot.exitCode === null && godot.signalCode === null) godot.kill("SIGTERM");
