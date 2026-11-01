@@ -83,8 +83,7 @@ func begin(players: Array[Dictionary], role_map: Dictionary, bot_flags: Array[bo
 		}
 		exchanges.append(transfer)
 		var upper_ready := bool(bot_flags[upper_index])
-		# Slaves return their mandatory highest cards automatically and wait for the upper role.
-		var slave_ready := true
+		var slave_ready := bool(bot_flags[slave_index])
 		ready_by_player[upper_index] = upper_ready
 		ready_by_player[slave_index] = slave_ready
 		if not upper_ready:
@@ -95,6 +94,23 @@ func begin(players: Array[Dictionary], role_map: Dictionary, bot_flags: Array[bo
 				"amount": amount,
 				"mandatory_ids": []
 			})
+		if not slave_ready:
+			var slave_pending_index := -1
+			for action_index in range(pending_returns.size()):
+				if int(pending_returns[action_index].player_index) == slave_index and str(pending_returns[action_index].kind) == "slave":
+					slave_pending_index = action_index
+					break
+			if slave_pending_index >= 0:
+				pending_returns[slave_pending_index].amount = int(pending_returns[slave_pending_index].amount) + amount
+				pending_returns[slave_pending_index].mandatory_ids.append_array(_card_ids(forced_cards))
+			else:
+				pending_returns.append({
+					"player_index": slave_index,
+					"role": pair.slave_role,
+					"kind": "slave",
+					"amount": amount,
+					"mandatory_ids": _card_ids(forced_cards)
+				})
 
 	if _all_ready():
 		_apply_exchanges(players)
@@ -193,22 +209,24 @@ func is_complete() -> bool:
 	return _all_ready() and completed_transfers.size() == exchanges.size()
 
 func pending_amount_for(player_index: int) -> int:
+	var total := 0
 	for action in pending_returns:
 		if int(action.player_index) == player_index:
-			return int(action.amount)
-	return 0
+			total += int(action.amount)
+	return total
 
 func role_for_player(player_index: int) -> String:
 	var value = roles_by_player.get(player_index, roles_by_player.get(str(player_index), ""))
 	return str(value)
 
 func mandatory_ids_for(player_index: int) -> Array[String]:
+	var pending_ids: Array[String] = []
 	for action in pending_returns:
 		if int(action.player_index) == player_index and str(action.kind) == "slave":
-			var result: Array[String] = []
 			for id in action.mandatory_ids:
-				result.append(str(id))
-			return result
+				pending_ids.append(str(id))
+	if not pending_ids.is_empty():
+		return pending_ids
 	var ids: Array[String] = []
 	for exchange in exchanges:
 		if int(exchange.slave_player) == player_index:
@@ -234,7 +252,7 @@ func readiness_by_role() -> Dictionary:
 
 func transfers_for_player(player_index: int) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	for transfer in completed_transfers:
+	for transfer in exchanges:
 		if int(transfer.upper_player) == player_index or int(transfer.slave_player) == player_index:
 			result.append(transfer.duplicate(true))
 	return result

@@ -736,6 +736,13 @@ func _send_deals(room: Dictionary) -> void:
 		var exchange_data: Array = []
 		if room.exchange != null:
 			exchange_data = room.exchange.transfers_for_player(i)
+			for transfer: Dictionary in exchange_data:
+				var incoming_cards: Array = []
+				for card_id in transfer.get("upper_return_ids", []):
+					var incoming_card = _find_card_in_room(room, str(card_id))
+					if incoming_card != null:
+						incoming_cards.append(incoming_card)
+				transfer["incoming_cards"] = _serialize_hand(incoming_cards)
 		_send(int(member.peer_id), Protocol.DEAL, {
 			"player_index": i,
 			"player_count": room.members.size(),
@@ -912,6 +919,13 @@ func _guest_name(requested: String) -> String:
 		cleaned = "Guest %d" % next_bot_name
 		next_bot_name += 1
 	return cleaned.substr(0, 16)
+
+func _find_card_in_room(room: Dictionary, card_id: String):
+	for player in room.game_state.players:
+		for card in player.hand:
+			if card.card_id() == card_id:
+				return card
+	return null
 
 static func _serialize_hand(hand: Array) -> Array[Dictionary]:
 	var serialized: Array[Dictionary] = []

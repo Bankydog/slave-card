@@ -62,6 +62,7 @@ var selected_card_ids: Array[String] = []
 var exchange_role := ""
 var exchange_mandatory_ids: Array[String] = []
 var exchange_readiness: Dictionary = {}
+var exchange_transfers: Array = []
 var exchange_participant := false
 var pending_request: Dictionary = {}
 var request_in_flight := false
@@ -809,8 +810,6 @@ func _show_online_game() -> void:
 			if current_index >= 0 and current_index < online_players.size():
 				current_name = str(online_players[current_index].get("name", current_name))
 			center_message = "Waiting for %s" % current_name
-	if trading:
-		center_message += "\n" + " · ".join(_trade_summary_parts())
 	table_view.set_center_info(center_message)
 	if trading:
 		var trade_center := CenterContainer.new()
@@ -822,6 +821,7 @@ func _show_online_game() -> void:
 		trade_content.alignment = BoxContainer.ALIGNMENT_CENTER
 		trade_center.add_child(trade_content)
 		_add_trade_progress(trade_content)
+		_add_incoming_exchange_preview(trade_content, _display_scale())
 		if not exchange_participant or _trade_is_ready(exchange_role):
 			var waiting := Label.new()
 			waiting.name = "TradeWaiting"
@@ -840,6 +840,13 @@ func _show_online_game() -> void:
 	bottom_hud.position = bottom_rect.position
 	bottom_hud.size = bottom_rect.size
 	root.add_child(bottom_hud)
+	var hand_count_label := Label.new()
+	hand_count_label.name = "OnlineHandCount"
+	hand_count_label.text = "Your hand: %d cards remaining" % online_hand.size()
+	hand_count_label.position = Vector2(24.0 * scale, 0.0)
+	hand_count_label.custom_minimum_size = Vector2(360.0 * scale, 28.0 * scale)
+	hand_count_label.add_theme_color_override("font_color", Color("#fff8e8"))
+	bottom_hud.add_child(hand_count_label)
 	var hand_scroll := ScrollContainer.new()
 	hand_scroll.name = "OnlineHandScroll"
 	hand_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
@@ -900,6 +907,11 @@ func _show_online_game() -> void:
 		play_button.disabled = selected_card_ids.is_empty() or int(online_snapshot.get("current_player", -1)) != online_player_index
 		buttons.add_child(play_button)
 		var pass_button := _image_action_button("PassButton", "res://assets/gadget/bottom-pass.png", "Pass", func(): _send_request(Protocol.PASS, {}))
+		var active_player_count := 0
+		for player in online_players:
+			if not bool(player.get("finished", false)):
+				active_player_count += 1
+		pass_button.disabled = current_cards.is_empty() and active_player_count <= 1
 		buttons.add_child(pass_button)
 		var leave_button := _image_action_button("LeaveButton", "res://assets/gadget/bottom-leave.png", "Leave", _leave_room)
 		buttons.add_child(leave_button)
@@ -1125,9 +1137,12 @@ func _select_rps_choice(choice: int) -> void:
 	_send_request(Protocol.SELECT_RPS, {"choice": choice})
 
 func _add_trade_progress(parent: Control) -> void:
-	var progress := HBoxContainer.new()
-	progress.alignment = BoxContainer.ALIGNMENT_CENTER
-	progress.add_theme_constant_override("separation", roundi(8.0 * _display_scale()))
+	var progress := GridContainer.new()
+	progress.name = "TradeProgress"
+	progress.columns = 3 if online_players.size() >= 4 else 2
+	progress.add_theme_constant_override("h_separation", roundi(12.0 * _display_scale()))
+	progress.add_theme_constant_override("v_separation", roundi(6.0 * _display_scale()))
+	progress.custom_minimum_size.x = minf(get_viewport_rect().size.x * 0.86, 680.0 * _display_scale())
 	parent.add_child(progress)
 	var roles: Array[String] = ["King", "Slave 1"]
 	if online_players.size() >= 7:
@@ -1142,7 +1157,38 @@ func _add_trade_progress(parent: Control) -> void:
 		label.text = "%s: %s" % [role, str(exchange_readiness.get(role, "Selecting"))]
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.custom_minimum_size.x = 120.0 * _display_scale()
 		progress.add_child(label)
+
+func _add_incoming_exchange_preview(parent: Control, scale: float) -> void:
+	if not exchange_role.begins_with("Slave "):
+		return
+	var incoming_cards: Array = []
+	for transfer in exchange_transfers:
+		if int(transfer.get("slave_player", -1)) == online_player_index:
+			incoming_cards = transfer.get("incoming_cards", [])
+			break
+	var heading := Label.new()
+	heading.name = "IncomingExchangeHeading"
+	heading.text = "Cards selected for you:" if not incoming_cards.is_empty() else "Waiting for the winner to choose your cards."
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	parent.add_child(heading)
+	if incoming_cards.is_empty():
+		return
+	var preview := HBoxContainer.new()
+	preview.name = "IncomingExchangeCards"
+	preview.alignment = BoxContainer.ALIGNMENT_CENTER
+	preview.add_theme_constant_override("separation", roundi(-24.0 * scale))
+	parent.add_child(preview)
+	for card_data in incoming_cards:
+		var card: CardData = CardDataScript.from_dict(card_data)
+		if card == null:
+			continue
+		var card_view := CardViewScript.new()
+		card_view.setup(card, false, _is_compact_view(), scale * 0.72)
+		card_view.disabled = true
+		preview.add_child(card_view)
 
 func _trade_is_ready(role: String) -> bool:
 	return str(exchange_readiness.get(role, "")) == "Ready"
@@ -1460,6 +1506,7 @@ func _on_server_message(message: Dictionary) -> void:
 			for card_id in payload.get("exchange_mandatory_ids", []):
 				exchange_mandatory_ids.append(str(card_id))
 			exchange_readiness = payload.get("exchange_readiness", exchange_readiness)
+			exchange_transfers = payload.get("exchange", exchange_transfers)
 			exchange_participant = bool(payload.get("exchange_participant", false))
 			online_players = payload.get("players", online_players)
 			online_hand.clear()
@@ -1603,6 +1650,15 @@ func _refresh_current_page() -> void:
 func _enforce_text_minimum(root: Node) -> void:
 	_enforce_node_text_minimum(root)
 
+var bold_game_font: FontVariation
+
+func _bold_game_font() -> FontVariation:
+	if bold_game_font == null:
+		bold_game_font = FontVariation.new()
+		bold_game_font.base_font = ThemeDB.fallback_font
+		bold_game_font.variation_embolden = 0.65
+	return bold_game_font
+
 func _enforce_node_text_minimum(node: Node) -> void:
 	if node is BaseButton and node.get_script() != CardViewScript and not (node is Button and node.text == "Play") and not node.has_meta("sfx_wired"):
 		node.pressed.connect(SfxManager.play_ui_click)
@@ -1610,6 +1666,8 @@ func _enforce_node_text_minimum(node: Node) -> void:
 	if node is Label or node is Button or node is LineEdit:
 		var control := node as Control
 		control.add_theme_font_size_override("font_size", maxi(16, control.get_theme_font_size("font_size")))
+		if page == "game":
+			control.add_theme_font_override("font", _bold_game_font())
 	if page == "lobby":
 		if node is Label:
 			(node as Label).add_theme_color_override("font_color", Color("#111111"))

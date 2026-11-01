@@ -25,6 +25,7 @@ var table_artwork: Control
 var seat_layer: Control
 var compact_view := false
 var built_compact := false
+var bold_game_font: FontVariation
 var layout_scale := 1.0
 var local_seat_index := 0
 var play_flight_layer: Control
@@ -78,9 +79,13 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 		var card_count := int(player.get("card_count", player.get("hand", []).size()))
 		name_labels[i].text = player_name if players.size() > 8 else "%d · %s" % [i + 1, player_name]
 		detail_labels[i].text = "%d cards" % card_count
+		_apply_bold_font(name_labels[i])
+		_apply_bold_font(detail_labels[i])
+		_apply_bold_font(status_labels[i])
 		role_icons[i].texture = role_texture(role)
 		role_icons[i].visible = role_icons[i].texture != null
-		role_icons[i].custom_minimum_size = Vector2(maxf((40.0 if not compact_view else 32.0) * layout_scale, 30.0), maxf((34.0 if not compact_view else 27.0) * layout_scale, 25.0))
+		role_icons[i].custom_minimum_size = Vector2(maxf(62.0 * layout_scale, 48.0), maxf(62.0 * layout_scale, 48.0))
+		role_icons[i].size = role_icons[i].custom_minimum_size
 		var status := "WAITING"
 		if bool(player.get("disconnected", false)) or bool(player.get("forfeited", false)):
 			status = "LEFT"
@@ -133,6 +138,7 @@ func configure(players: Array, local_index: int, current_player: int, passed: Ar
 	call_deferred("_layout_seats")
 
 func set_center_info(message: String) -> void:
+	center_info.custom_minimum_size.x = 0.0
 	center_info.text = message
 
 func seats_can_animate() -> bool:
@@ -200,6 +206,13 @@ func set_center_message(message: String) -> void:
 		center_pile.queue_free()
 		center_pile = null
 
+func _apply_bold_font(control: Control) -> void:
+	if bold_game_font == null:
+		bold_game_font = FontVariation.new()
+		bold_game_font.base_font = ThemeDB.fallback_font
+		bold_game_font.variation_embolden = 0.65
+	control.add_theme_font_override("font", bold_game_font)
+
 func _build_center_layer() -> void:
 	center_layer = CenterContainer.new()
 	center_layer.name = "CenterPileLayer"
@@ -215,12 +228,15 @@ func _build_center_layer() -> void:
 	center_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	center_title.add_theme_color_override("font_color", Color("#f3e9cc"))
 	center_title.add_theme_font_size_override("font_size", 16)
+	_apply_bold_font(center_title)
 	center_group.add_child(center_title)
 	center_info = Label.new()
 	center_info.name = "CardsTurnInfo"
 	center_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	center_info.add_theme_color_override("font_color", Color("#f3e9cc"))
+	center_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	center_info.add_theme_font_size_override("font_size", 16)
+	_apply_bold_font(center_info)
 	center_group.add_child(center_info)
 
 func _ensure_seats(count: int) -> void:
@@ -257,8 +273,9 @@ func _ensure_seats(count: int) -> void:
 		role_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		role_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		role_icon.size_flags_horizontal = Control.SIZE_SHRINK_END
+		role_icon.z_index = 10
 		role_icon.hide()
-		name_row.add_child(role_icon)
+		seat_layer.add_child(role_icon)
 		var details_row := HBoxContainer.new()
 		details_row.add_theme_constant_override("separation", 4)
 		content.add_child(details_row)
@@ -355,6 +372,12 @@ func _layout_seats() -> void:
 		var normalized: Vector2 = positions[i]
 		var point := center + Vector2((normalized.x - 0.5) * table_rect.size.x, (normalized.y - 0.5) * table_rect.size.y)
 		panel.position = point - panel_size * 0.5
+		var role_icon := role_icons[i]
+		var icon_size := role_icon.custom_minimum_size
+		var right_position := Vector2(panel.position.x + panel_size.x + 4.0 * scale, point.y - icon_size.y * 0.5)
+		if right_position.x + icon_size.x > size.x:
+			right_position.x = panel.position.x - icon_size.x - 4.0 * scale
+		role_icon.position = right_position
 
 static func seat_panel_size(player_count: int, scale: float = 1.0) -> Vector2:
 	if player_count <= 4:

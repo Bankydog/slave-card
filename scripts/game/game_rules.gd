@@ -6,7 +6,7 @@ const CardDataScript = preload("res://scripts/cards/card_data.gd")
 const RANKS := ["3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "2"]
 const SUIT_ORDER := ["Clubs", "Diamonds", "Hearts", "Spades"]
 const MIN_STRAIGHT_LENGTH := 3
-const MAX_STRAIGHT_LENGTH := 5
+const MAX_STRAIGHT_LENGTH := 8
 const TYPE_SINGLE := "Single"
 const TYPE_PAIR := "Pair"
 const TYPE_TRIPLE := "Triple"
@@ -45,7 +45,7 @@ func classify(cards: Array) -> Dictionary:
 		var group_type := TYPE_PAIR if card_count == 2 else TYPE_TRIPLE if card_count == 3 else TYPE_FOUR_OF_A_KIND
 		return _valid(group_type, card_count, rank_values[0])
 	if card_count < MIN_STRAIGHT_LENGTH or card_count > MAX_STRAIGHT_LENGTH:
-		return _invalid("A straight must contain three to five cards.")
+		return _invalid("A straight must contain three to eight cards.")
 	if rank_values.size() != card_count:
 		return _invalid("A straight cannot repeat a rank.")
 	if not straight_allow_two and rank_values.has(RANKS.size() - 1):
@@ -71,7 +71,13 @@ func can_beat(cards: Array, current_cards: Array) -> bool:
 	var current := classify(current_cards)
 	if not bool(current.valid):
 		return false
-	if _family_for_type(str(play.type)) != _family_for_type(str(current.type)):
+	if _family_for_combination(play) != _family_for_combination(current):
+		return false
+	var current_type := str(current.type)
+	var play_type := str(play.type)
+	if current_type in [TYPE_STRAIGHT_FLUSH, TYPE_TRIPLE] and play_type != current_type:
+		return false
+	if current_type in [TYPE_PAIR, TYPE_FOUR_OF_A_KIND] and play_type not in [TYPE_PAIR, TYPE_FOUR_OF_A_KIND]:
 		return false
 	return compare_combinations(cards, current_cards) > 0
 
@@ -108,7 +114,7 @@ func compare_combinations(cards_a: Array, cards_b: Array) -> int:
 	var combination_b := classify(cards_b)
 	if not bool(combination_a.valid) or not bool(combination_b.valid):
 		return 0
-	if _family_for_type(str(combination_a.type)) != _family_for_type(str(combination_b.type)):
+	if _family_for_combination(combination_a) != _family_for_combination(combination_b):
 		return 0
 	var count_comparison := int(combination_a.card_count) - int(combination_b.card_count)
 	if count_comparison != 0:
@@ -249,9 +255,12 @@ func _valid(combination_type: String, card_count: int, high_rank: int) -> Dictio
 func _invalid(reason: String) -> Dictionary:
 	return {"valid": false, "type": "", "card_count": 0, "high_rank": -1, "error": reason}
 
-func _family_for_type(combination_type: String) -> String:
+func _family_for_combination(combination: Dictionary) -> String:
+	var combination_type := str(combination.get("type", ""))
+	if combination_type in [TYPE_STRAIGHT, TYPE_STRAIGHT_FLUSH]:
+		return "Odd" if int(combination.get("card_count", 0)) % 2 == 1 else "Even"
 	match combination_type:
-		TYPE_SINGLE, TYPE_TRIPLE, TYPE_STRAIGHT, TYPE_STRAIGHT_FLUSH:
+		TYPE_SINGLE, TYPE_TRIPLE:
 			return "Odd"
 		TYPE_PAIR, TYPE_FOUR_OF_A_KIND:
 			return "Even"

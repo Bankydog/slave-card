@@ -110,11 +110,7 @@ func play_cards(player_index: int, requested_cards: Array) -> bool:
 	if hand.is_empty():
 		players[player_index].finished = true
 		finishing_order.append(player_index)
-		if _active_player_count() <= 1:
-			for i in range(players.size()):
-				if not players[i].finished:
-					players[i].finished = true
-					finishing_order.append(i)
+		if _active_player_count() == 0:
 			finishing_order.append_array(forfeited_order)
 			changed.emit()
 			return true
@@ -151,6 +147,8 @@ func pass_turn(player_index: int) -> bool:
 	if player_index < 0 or player_index >= players.size():
 		return false
 	if player_index != current_player or players[player_index].finished or passed[player_index] or not rules.can_pass():
+		return false
+	if current_cards.is_empty() and _active_player_count() <= 1:
 		return false
 	passed[player_index] = true
 	advance_turn()
